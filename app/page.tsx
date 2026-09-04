@@ -3,7 +3,8 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { fetchYahooKlines, YahooDataError } from "@/lib/yahooFutures";
-import { evaluateLiveSignal, STATE_INFO, LiveSignal } from "@/lib/retestEngine";
+import { evaluateLiveSignal, LiveSignal } from "@/lib/retestEngine";
+import { getDisplayInfo } from "@/lib/statusDisplay";
 import { OOS_SEED } from "@/lib/oosSeed";
 import { upsertFromLiveSignal, loadSignalRecords } from "@/lib/signalLog";
 import { getNotificationPermission, requestNotificationPermission, showNotification, NotificationPermissionStatus } from "@/lib/notifications";
@@ -75,7 +76,7 @@ export default function HomePage() {
     setNotifPermission(result);
   };
 
-  const info = signal ? STATE_INFO[signal.state] : null;
+  const info = signal ? getDisplayInfo(signal) : null;
   const isActive = signal?.state === "RETEST_CONFIRMED";
   const s = OOS_SEED.summary;
 
