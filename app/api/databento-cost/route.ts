@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     dataset: "GLBX.MDP3",
     symbols: "NQ.FUT",
     stype_in: "parent",
-    schema: "ohlcv-5m",
+    schema: "ohlcv-1m",
     start: fmt(start),
     end: fmt(end),
   });
@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
       days,
       dataset: "GLBX.MDP3",
       symbols: "NQ.FUT",
-      schema: "ohlcv-5m",
+      schema: "ohlcv-1m（會自己合併成5分鐘K線，不是Databento原生支援5分鐘）",
       start: fmt(start),
       end: fmt(end),
       note: "這只是查價，還沒有真的下載資料，不會產生費用。",
