@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { fetchYahooKlines, YahooDataError } from "@/lib/yahooFutures";
 import { evaluateLiveSignal, STATE_INFO, LiveSignal } from "@/lib/retestEngine";
 import { OOS_SEED } from "@/lib/oosSeed";
+import { upsertFromLiveSignal, loadSignalRecords, auditSignalRecords, SignalRecord } from "@/lib/signalLog";
 
 // 首頁：即時訊號 + 策略驗證狀態。
 //
@@ -29,6 +30,7 @@ export default function HomePage() {
   const [signal, setSignal] = useState<LiveSignal | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [records, setRecords] = useState<SignalRecord[]>([]);
 
   const runCheck = async () => {
     setLoading(true);
@@ -37,6 +39,8 @@ export default function HomePage() {
       const candles = await fetchYahooKlines(symbol, "5m", "5d");
       const result = evaluateLiveSignal(symbol, candles, ENGINE_WINDOW, ENGINE_TP, RETEST_ZONE_PCT);
       setSignal(result);
+      upsertFromLiveSignal(result, ENGINE_TP);
+      setRecords(loadSignalRecords());
     } catch (err) {
       setError(err instanceof YahooDataError ? `${err.message}（來源：${err.source}）` : String(err));
       setSignal(null);
@@ -45,6 +49,7 @@ export default function HomePage() {
   };
 
   useEffect(() => {
+    setRecords(loadSignalRecords());
     runCheck();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -52,6 +57,7 @@ export default function HomePage() {
   const info = signal ? STATE_INFO[signal.state] : null;
   const isActive = signal?.state === "RETEST_CONFIRMED";
   const s = OOS_SEED.summary;
+  const paperReport = records.length ? auditSignalRecords(records) : null;
 
   return (
     <main className="max-w-md mx-auto px-4 pt-8 pb-10">
@@ -159,6 +165,61 @@ export default function HomePage() {
         <div className="text-[10px] text-subtext mt-3 leading-relaxed">
           資料來源：Databento GLBX.MDP3（NQ.c.0連續合約）2年份1分鐘K線。訓練/驗證/樣本外三段勝率都落在81.8%~81.9%，一致性高，但樣本仍然有限（400筆），還沒到「可以直接拿真錢下去」的信心水準。
         </div>
+      </div>
+
+      {/* 本機訊號紀錄（模擬交易） */}
+      <div className="rounded-2xl border border-border bg-panel p-4 mb-4">
+        <div className="text-xs text-subtext mb-2">本機訊號紀錄（模擬交易）</div>
+        {records.length === 0 ? (
+          <div className="text-xs text-subtext">
+            尚無紀錄，出現A級訊號並走完完整流程後會自動記錄在這台裝置的瀏覽器裡（清瀏覽器資料會消失，不是雲端同步）。
+          </div>
+        ) : (
+          <div>
+            {paperReport && paperReport.sampleCount > 0 && (
+              <div className="grid grid-cols-3 gap-2 text-center text-xs mb-3">
+                <div>
+                  <div className="text-subtext">樣本數</div>
+                  <div className="font-semibold numeric-safe">{paperReport.sampleCount}</div>
+                </div>
+                <div>
+                  <div className="text-subtext">勝率</div>
+                  <div className="font-semibold numeric-safe">{paperReport.winRate.toFixed(1)}%</div>
+                </div>
+                <div>
+                  <div className="text-subtext">期望值</div>
+                  <div className={`font-semibold numeric-safe ${paperReport.expectancy >= 0 ? "text-bull" : "text-bear"}`}>
+                    {paperReport.expectancy >= 0 ? "+" : ""}
+                    {paperReport.expectancy.toFixed(2)}R
+                  </div>
+                </div>
+              </div>
+            )}
+            <details>
+              <summary className="text-xs text-subtext cursor-pointer select-none mb-2">
+                最近紀錄（共{records.length}筆）▾
+              </summary>
+              <div className="space-y-1.5">
+                {[...records]
+                  .reverse()
+                  .slice(0, 15)
+                  .map((r) => (
+                    <div key={r.id} className="flex items-center justify-between text-xs rounded-lg bg-panel2 px-3 py-2">
+                      <span
+                        className={r.status === "WIN" ? "text-bull" : r.status === "LOSS" ? "text-bear" : "text-subtext"}
+                      >
+                        {r.status}
+                      </span>
+                      <span className="numeric-safe">
+                        {r.rMultiple != null ? `${r.rMultiple >= 0 ? "+" : ""}${r.rMultiple.toFixed(2)}R` : "—"}
+                      </span>
+                      <span className="text-subtext">{new Date(r.refTime * 1000).toLocaleDateString("zh-TW")}</span>
+                    </div>
+                  ))}
+              </div>
+            </details>
+          </div>
+        )}
       </div>
 
       <div className="text-[11px] text-subtext leading-relaxed">
