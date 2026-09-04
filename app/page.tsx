@@ -1,46 +1,60 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { fetchYahooKlines, YahooDataError } from "@/lib/yahooFutures";
 import { evaluateLiveSignal, STATE_INFO, LiveSignal } from "@/lib/retestEngine";
 import { OOS_SEED } from "@/lib/oosSeed";
-import { upsertFromLiveSignal, loadSignalRecords, auditSignalRecords, SignalRecord } from "@/lib/signalLog";
+import { upsertFromLiveSignal, loadSignalRecords } from "@/lib/signalLog";
+import { getNotificationPermission, requestNotificationPermission, showNotification, NotificationPermissionStatus } from "@/lib/notifications";
 
 // 首頁：即時訊號 + 策略驗證狀態。
 //
 // 即時訊號：跟crypto版本完全同一套引擎（retestCore.ts / retestEngine.ts，程式碼沒改，
-// 只換了Candle的資料來源），接Yahoo免費資料，開頁自動檢查一次。
+// 只換了Candle的資料來源），接Yahoo免費資料。開頁自動檢查一次，之後每5分鐘自動重新
+// 檢查一次（背景輪詢，分頁還開著才會運作，跟通知的限制一樣）。
 //
-// 策略驗證狀態：讀 lib/oosSeed.ts 裡刻好的Databento 2年回測結果（訓練/驗證/樣本外
-// 三段勝率都落在81.8%~81.9%，一致性很高，已經跟使用者確認過這個結果站得住腳）。
+// 策略驗證狀態：讀 lib/oosSeed.ts 裡刻好的Databento 2年回測結果。
 //
 // 【誠實揭露仍然保留】
 // - 樣本外段只有80筆，加總三段400筆，都來自「同一段2年歷史」，不保證未來市場環境
-//   （例如波動度大幅改變）還會維持這個表現
-// - 「連續合約展期跳空」是否影響個別訊號，還沒有逐筆排查過，只是統計上三段一致性
-//   高到不太像是少數跳空造成的，這是推論，不是100%排除
+//   還會維持這個表現
 // - 資料來源限制（Yahoo免費、非官方）：15-20分鐘延遲、只能看最近約60天歷史
+// - 背景輪詢只在分頁還開著（可在背景分頁）時才會運作，完全關閉分頁就會停止
 
 const ENGINE_WINDOW = 60;
 const ENGINE_TP = 1;
 const RETEST_ZONE_PCT = 0.3;
+const AUTO_POLL_MS = 5 * 60 * 1000; // 5分鐘
 
 export default function HomePage() {
-  const [symbol, setSymbol] = useState("NQ=F");
+  const [symbol] = useState("NQ=F");
   const [signal, setSignal] = useState<LiveSignal | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [records, setRecords] = useState<SignalRecord[]>([]);
+  const [notifPermission, setNotifPermission] = useState<NotificationPermissionStatus>("default");
 
   const runCheck = async () => {
     setLoading(true);
     setError(null);
     try {
+      const beforeRecords = loadSignalRecords();
+      const beforeOpenIds = new Set(beforeRecords.filter((r) => r.status === "OPEN").map((r) => r.id));
+
       const candles = await fetchYahooKlines(symbol, "5m", "5d");
       const result = evaluateLiveSignal(symbol, candles, ENGINE_WINDOW, ENGINE_TP, RETEST_ZONE_PCT);
       setSignal(result);
       upsertFromLiveSignal(result, ENGINE_TP);
-      setRecords(loadSignalRecords());
+
+      const afterRecords = loadSignalRecords();
+      const newlyOpen = afterRecords.filter((r) => r.status === "OPEN" && !beforeOpenIds.has(r.id));
+      newlyOpen.forEach((r) => {
+        showNotification(
+          `A級進場訊號：${r.symbol} ${r.direction === "LONG" ? "做多" : "做空"}`,
+          `進場價 ${r.entryPrice.toPrecision(6)} ・ 止損 ${r.stopLoss.toPrecision(6)} ・ 止盈 ${r.takeProfit.toPrecision(6)}`,
+          r.id
+        );
+      });
     } catch (err) {
       setError(err instanceof YahooDataError ? `${err.message}（來源：${err.source}）` : String(err));
       setSignal(null);
@@ -49,18 +63,24 @@ export default function HomePage() {
   };
 
   useEffect(() => {
-    setRecords(loadSignalRecords());
+    setNotifPermission(getNotificationPermission());
     runCheck();
+    const id = setInterval(runCheck, AUTO_POLL_MS);
+    return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleEnableNotifications = async () => {
+    const result = await requestNotificationPermission();
+    setNotifPermission(result);
+  };
 
   const info = signal ? STATE_INFO[signal.state] : null;
   const isActive = signal?.state === "RETEST_CONFIRMED";
   const s = OOS_SEED.summary;
-  const paperReport = records.length ? auditSignalRecords(records) : null;
 
   return (
-    <main className="max-w-md mx-auto px-4 pt-8 pb-10">
+    <main className="max-w-md mx-auto px-4 pt-8 pb-6">
       <header className="mb-4 flex items-center justify-between">
         <h1 className="text-xl font-display font-bold tracking-tight">NQ Signal</h1>
         <button
@@ -162,65 +182,16 @@ export default function HomePage() {
             <div className="font-semibold numeric-safe text-bear">-{s.maxDrawdownR.toFixed(2)}R</div>
           </div>
         </div>
-        <div className="text-[10px] text-subtext mt-3 leading-relaxed">
-          資料來源：Databento GLBX.MDP3（NQ.c.0連續合約）2年份1分鐘K線。訓練/驗證/樣本外三段勝率都落在81.8%~81.9%，一致性高，但樣本仍然有限（400筆），還沒到「可以直接拿真錢下去」的信心水準。
-        </div>
+        <Link href="/history" className="text-xs text-bull mt-3 inline-block">
+          查看歷史紀錄 →
+        </Link>
       </div>
 
-      {/* 本機訊號紀錄（模擬交易） */}
-      <div className="rounded-2xl border border-border bg-panel p-4 mb-4">
-        <div className="text-xs text-subtext mb-2">本機訊號紀錄（模擬交易）</div>
-        {records.length === 0 ? (
-          <div className="text-xs text-subtext">
-            尚無紀錄，出現A級訊號並走完完整流程後會自動記錄在這台裝置的瀏覽器裡（清瀏覽器資料會消失，不是雲端同步）。
-          </div>
-        ) : (
-          <div>
-            {paperReport && paperReport.sampleCount > 0 && (
-              <div className="grid grid-cols-3 gap-2 text-center text-xs mb-3">
-                <div>
-                  <div className="text-subtext">樣本數</div>
-                  <div className="font-semibold numeric-safe">{paperReport.sampleCount}</div>
-                </div>
-                <div>
-                  <div className="text-subtext">勝率</div>
-                  <div className="font-semibold numeric-safe">{paperReport.winRate.toFixed(1)}%</div>
-                </div>
-                <div>
-                  <div className="text-subtext">期望值</div>
-                  <div className={`font-semibold numeric-safe ${paperReport.expectancy >= 0 ? "text-bull" : "text-bear"}`}>
-                    {paperReport.expectancy >= 0 ? "+" : ""}
-                    {paperReport.expectancy.toFixed(2)}R
-                  </div>
-                </div>
-              </div>
-            )}
-            <details>
-              <summary className="text-xs text-subtext cursor-pointer select-none mb-2">
-                最近紀錄（共{records.length}筆）▾
-              </summary>
-              <div className="space-y-1.5">
-                {[...records]
-                  .reverse()
-                  .slice(0, 15)
-                  .map((r) => (
-                    <div key={r.id} className="flex items-center justify-between text-xs rounded-lg bg-panel2 px-3 py-2">
-                      <span
-                        className={r.status === "WIN" ? "text-bull" : r.status === "LOSS" ? "text-bear" : "text-subtext"}
-                      >
-                        {r.status}
-                      </span>
-                      <span className="numeric-safe">
-                        {r.rMultiple != null ? `${r.rMultiple >= 0 ? "+" : ""}${r.rMultiple.toFixed(2)}R` : "—"}
-                      </span>
-                      <span className="text-subtext">{new Date(r.refTime * 1000).toLocaleDateString("zh-TW")}</span>
-                    </div>
-                  ))}
-              </div>
-            </details>
-          </div>
-        )}
-      </div>
+      {notifPermission !== "granted" && notifPermission !== "unsupported" && (
+        <button onClick={handleEnableNotifications} className="btn-primary w-full border border-border bg-panel2 text-xs mb-4">
+          開啟A級訊號通知
+        </button>
+      )}
 
       <div className="text-[11px] text-subtext leading-relaxed">
         驗證方式：拿上面「Reference High/Low」「現價」跟你自己另外看的真實NQ盤面比對，看數字合不合理、狀態轉換順不順。有問題把截圖傳給我。
