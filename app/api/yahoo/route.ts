@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
     const volumes: (number | null)[] = quote.volume ?? [];
 
     // Yahoo在無成交/盤前盤後空檔常會回傳null，這幾根要濾掉，不能當作0處理
-    const candles = timestamps
+    let candles = timestamps
       .map((t, i) => ({
         time: t,
         open: opens[i],
@@ -70,6 +70,14 @@ export async function GET(req: NextRequest) {
       close: number;
       volume: number;
     }[];
+
+    // 實測發現：Yahoo有時會多塞一根「當下報價快照」，開高低收四個數字完全一樣、
+    // 時間沒有對齊5分鐘格線（例如 11:21:31 而不是 11:20:00）——這不是一根真正走完的
+    // K棒，是即時報價被包裝成K棒的樣子。這裡只保留真正對齊5分鐘格線的K棒，避免
+    // 這種假K棒混進回踩引擎的判斷邏輯裡。只在 interval=5m 時套用這個過濾。
+    if (interval === "5m") {
+      candles = candles.filter((c) => c.time % 300 === 0);
+    }
 
     return NextResponse.json({ candles });
   } catch (err) {
