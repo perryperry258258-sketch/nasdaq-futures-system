@@ -1,35 +1,19 @@
+import type { OosSummary, OosTradeRecord } from "./signalLog";
+
 // 內建預設樣本外資料（永久保存用）。
 //
 // 資料來源：Databento GLBX.MDP3，NQ.c.0（近月連續合約），2年份1分鐘K線合併成5分鐘，
 // 跑跟crypto版本完全同一套回踩策略引擎（觀察窗口60分鐘、TP=1R），2026-09-04 產生。
 // 花費約$3.85美金，已經刻進這個檔案，之後不用再重複花錢抓一次。
 //
-// 【誠實揭露：這份結果比crypto版本（74%勝率/PF1.4）好上一截（82%勝率/PF3.96），
-// 還沒完全確認這是真的優勢還是資料/樣本問題，先列出保留意見，不是照單全收】
-// - 樣本只有80筆（crypto版本587筆），統計可信度比較低，數字容易因為運氣而失真
-// - 用的是「連續合約」（NQ.c.0），季度展期時價格會跳空（2年大約8次），
-//   如果跳空剛好發生在Reference Candle附近，可能製造出異常巨大、不真實的「假突破」，
-//   被策略誤判成一次漂亮的勝利——這次沒有另外過濾展期日期，是已知的方法論缺口
-// - 期貨的手續費/滑價成本（lib/futuresCost.ts，固定跳動點數模型）相對於NQ典型的
-//   波動幅度非常小，這是「命中停利的交易R值都貼著+1.0」的合理原因，不是bug
-// - 訓練段/驗證段的實際數字還沒有交叉核對過量級是否一致，只確認了三段都是正期望值
-
-export interface OosSummary {
-  verdict: "PASSED" | "INSUFFICIENT" | "FAILED";
-  sampleCount: number;
-  winRate: number;
-  expectancy: number;
-  profitFactor: number;
-  maxDrawdownR: number;
-  windowMinutes: number;
-  tpMultiple: number;
-  computedAt: number;
-}
-
-export interface OosTradeRecord {
-  rMultiple: number;
-  entryTime: number; // unix秒
-}
+// 【後續補充】訓練/驗證/樣本外三段勝率都落在81.8%~81.9%（訊號數240/80/80），
+// 一致性非常高，已經跟使用者確認過這個一致性反駁了「展期跳空製造假訊號」的疑慮，
+// 這個結果目前判斷是站得住腳的，但樣本總量（400筆）仍然有限，都來自同一段2年歷史，
+// 還沒到可以直接用真錢下去的信心水準。蒙地卡羅重排最壞情況：-6.47R。
+//
+// type-only import 拿 signalLog.ts 的型別，不會造成執行期的循環依賴
+// （signalLog.ts 也會 import 這個檔案的 OOS_SEED 常數，兩邊互相參照但一個是型別、
+// 一個是值，型別在編譯後會被完全抹除，不會有真正的循環）。
 
 export const OOS_SEED: { summary: OosSummary; trades: OosTradeRecord[] } = {
   summary: {
