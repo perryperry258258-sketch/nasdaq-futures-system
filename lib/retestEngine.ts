@@ -1,5 +1,6 @@
 import { Candle } from "./yahooFutures";
 import { detectFromOpen, findTodayOpenIdx, checkDataFreshness, WEEKDAYS } from "./retestCore";
+import { getETInfo } from "./etTime";
 
 // 即時訊號狀態機。
 //
@@ -58,6 +59,24 @@ export interface LiveSignal {
   updatedAt: number;
 }
 
+// 判斷「現在」（不是資料裡最後一根K棒的時間，是真實的當下）是不是CME期貨的
+// 每週休市時間——週五17:00 ET收盤，週日18:00 ET才重新開盤，中間這段時間本來就
+// 不會有新資料，資料「延遲」是正常現象，不該被當成「資料異常」嚇使用者。
+// 這裡沒有處理每日5-6PM ET的例行維護休市（比較短，且發生機率遇到使用者剛好在
+// 那個時間點打開App的機率低很多），也沒有處理國定假日休市（CME行事曆每年會變，
+// 沒有寫死進來），這兩種情況目前還是會被歸類成資料異常，這是已知、故意先不處理
+// 的簡化，不是遺漏。
+function isWeeklyMarketClosed(nowSec: number): boolean {
+  const info = getETInfo(nowSec);
+  const minutesNow = info.hour * 60 + info.minute;
+  const fridayCloseMinutes = 17 * 60; // 週五17:00 ET
+  const sundayOpenMinutes = 18 * 60; // 週日18:00 ET
+  if (info.weekday === "Sat") return true;
+  if (info.weekday === "Fri" && minutesNow >= fridayCloseMinutes) return true;
+  if (info.weekday === "Sun" && minutesNow < sundayOpenMinutes) return true;
+  return false;
+}
+
 export function evaluateLiveSignal(
   symbol: string,
   candles5mRaw: Candle[],
@@ -99,6 +118,9 @@ export function evaluateLiveSignal(
     updatedAt: Date.now(),
   };
 
+  if (isWeeklyMarketClosed(nowSec)) {
+    return { ...base, state: "NO_SESSION_TODAY" };
+  }
   if (candles5m.length === 0) return { ...base, state: "DATA_STALE" };
   if (!freshness.fresh) return { ...base, state: "DATA_STALE" };
 
