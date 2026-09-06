@@ -28,6 +28,46 @@ const ENGINE_TP = 1;
 const RETEST_ZONE_PCT = 0.3;
 const AUTO_POLL_MS = 5 * 60 * 1000; // 5分鐘
 
+// 進度流程——跟crypto版本 app/signal/[symbol]/page.tsx 的 computeSteps 完全同一套邏輯，
+// 純粹把 LiveSignal 已經算出來的欄位拆解成流程步驟顯示，沒有新增任何判斷邏輯。
+type StepStatus = "done" | "current" | "pending";
+
+function computeSteps(s: LiveSignal): { label: string; status: StepStatus; time: number | null }[] {
+  const windowDone = s.refHigh != null;
+  const breakoutDone = s.breakoutTime != null;
+  const retestDone = s.retestTime != null;
+  const entryReached = ["RETEST_CONFIRMED", "TP_HIT", "SL_HIT"].includes(s.state);
+
+  const step = (done: boolean, isCurrent: boolean, label: string, time: number | null) => ({
+    label,
+    status: (done ? "done" : isCurrent ? "current" : "pending") as StepStatus,
+    time,
+  });
+
+  return [
+    step(windowDone, s.state === "SETUP", "觀察窗口完成", windowDone ? s.refTime : null),
+    step(windowDone, false, "最大成交量K確定", windowDone ? s.refTime : null),
+    step(breakoutDone, s.state === "WATCHING", "突破", s.breakoutTime),
+    step(breakoutDone, s.state === "WAIT_RETEST", "等待回踩", null),
+    step(retestDone, false, "回踩確認", s.retestTime),
+    step(entryReached, s.state === "RETEST_CONFIRMED", "可以進場", s.signalTime),
+  ];
+}
+
+function fmtTime(t: number | null) {
+  if (!t) return "—";
+  return new Date(t * 1000).toLocaleTimeString("zh-TW", { hour12: false });
+}
+
+function Row({ label, value, color, highlight }: { label: string; value: string; color?: string; highlight?: boolean }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-subtext">{label}</span>
+      <span className={`numeric-safe font-medium ${color ?? ""} ${highlight ? "font-semibold" : ""}`}>{value}</span>
+    </div>
+  );
+}
+
 export default function HomePage() {
   const [symbol] = useState("NQ=F");
   const [signal, setSignal] = useState<LiveSignal | null>(null);
@@ -105,57 +145,63 @@ export default function HomePage() {
 
       {/* 目前交易機會 */}
       {signal && info && (
-        <div className={`rounded-2xl border p-4 mb-4 ${isActive ? "bg-bull/10 border-bull/30" : "bg-panel border-border"}`}>
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-lg font-display font-bold">{signal.symbol}</span>
-            <span className="text-sm font-semibold">
-              {info.emoji} {info.label}
-            </span>
-          </div>
-
-          {signal.direction && (
-            <div className="text-xs text-subtext mb-3">方向：{signal.direction === "LONG" ? "做多" : "做空"}</div>
-          )}
-
-          <div className="grid grid-cols-2 gap-2 text-xs mb-3">
-            <div>
-              <div className="text-subtext">現價</div>
-              <div className="font-semibold numeric-safe">{signal.currentPrice?.toFixed(2) ?? "—"}</div>
-            </div>
-            <div>
-              <div className="text-subtext">資料延遲</div>
-              <div className="font-semibold numeric-safe">
-                {signal.dataAgeMinutes != null ? `${signal.dataAgeMinutes.toFixed(1)}分` : "—"}
-              </div>
-            </div>
-            <div>
-              <div className="text-subtext">Reference High</div>
-              <div className="font-semibold numeric-safe">{signal.refHigh?.toFixed(2) ?? "—"}</div>
-            </div>
-            <div>
-              <div className="text-subtext">Reference Low</div>
-              <div className="font-semibold numeric-safe">{signal.refLow?.toFixed(2) ?? "—"}</div>
+        <div>
+          <div className={`rounded-2xl border p-4 mb-3 ${isActive ? "bg-bull/10 border-bull/30" : "bg-panel border-border"}`}>
+            <div className="flex items-center justify-between">
+              {signal.direction && (
+                <span className={`text-sm font-semibold ${signal.direction === "LONG" ? "text-bull" : "text-bear"}`}>
+                  {signal.direction === "LONG" ? "做多" : "做空"}
+                </span>
+              )}
+              <span className="text-sm font-semibold">
+                {info.emoji} {info.label}
+              </span>
             </div>
           </div>
 
-          {isActive && (
-            <div className="grid grid-cols-3 gap-2 text-center text-xs rounded-xl bg-panel2 p-3">
-              <div>
-                <div className="text-subtext">進場價</div>
-                <div className="font-semibold numeric-safe">{signal.entryPrice?.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-subtext">止損</div>
-                <div className="font-semibold numeric-safe text-bear">{signal.stopLoss?.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-subtext">止盈</div>
-                <div className="font-semibold numeric-safe text-bull">{signal.takeProfit?.toFixed(2)}</div>
-              </div>
+          {/* 進度流程 */}
+          <div className="rounded-2xl border border-border bg-panel p-4 mb-3">
+            <div className="text-xs text-subtext mb-3">進度流程</div>
+            <div className="space-y-3">
+              {computeSteps(signal).map((step, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <span
+                    className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
+                      step.status === "done" ? "bg-bull" : step.status === "current" ? "bg-info" : "bg-panel2 border border-border"
+                    }`}
+                  >
+                    {step.status === "done" && (
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#0A0E14" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 6 9 17l-5-5" />
+                      </svg>
+                    )}
+                  </span>
+                  <span className={`text-sm flex-1 ${step.status === "pending" ? "text-subtext" : ""}`}>{step.label}</span>
+                  {step.status === "current" ? (
+                    <span className="text-xs text-info">進行中</span>
+                  ) : step.time ? (
+                    <span className="text-xs text-subtext numeric-safe">{fmtTime(step.time)}</span>
+                  ) : null}
+                </div>
+              ))}
             </div>
-          )}
+          </div>
 
-          <div className="text-[10px] text-subtext mt-3">更新於 {new Date(signal.updatedAt).toLocaleTimeString("zh-TW")}</div>
+          {/* 數值明細 */}
+          <div className="rounded-2xl border border-border bg-panel p-4 mb-4">
+            <div className="text-xs text-subtext mb-3">數值明細</div>
+            <div className="space-y-2 text-sm">
+              <Row label="基準K線時間" value={signal.refTime ? new Date(signal.refTime * 1000).toLocaleString("zh-TW", { hour12: false }) : "—"} />
+              <Row label="基準最高價" value={signal.refHigh?.toFixed(2) ?? "—"} />
+              <Row label="基準最低價" value={signal.refLow?.toFixed(2) ?? "—"} />
+              <Row label="目前價格" value={signal.currentPrice?.toFixed(2) ?? "—"} />
+              {signal.distanceToBreakoutPct != null && <Row label="距突破幅度" value={`${signal.distanceToBreakoutPct.toFixed(2)}%`} />}
+              {signal.entryPrice != null && <Row label="進場價" value={signal.entryPrice.toFixed(2)} highlight />}
+              {signal.stopLoss != null && <Row label="止損價" value={signal.stopLoss.toFixed(2)} color="text-bear" />}
+              {signal.takeProfit != null && <Row label="止盈價" value={signal.takeProfit.toFixed(2)} color="text-bull" />}
+              <Row label="資料延遲" value={signal.dataAgeMinutes != null ? `${signal.dataAgeMinutes.toFixed(1)} 分鐘` : "—"} />
+            </div>
+          </div>
         </div>
       )}
 
