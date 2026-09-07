@@ -1,7 +1,7 @@
 import { Candle } from "./yahooFutures";
 import { detectFromOpen, findTodayOpenIdx, checkDataFreshness, WEEKDAYS } from "./retestCore";
 import { getETInfo } from "./etTime";
-import { isUsMarketHoliday } from "./usMarketHolidays";
+import { getUsMarketHolidayName } from "./usMarketHolidays";
 
 // 即時訊號狀態機。
 //
@@ -58,24 +58,28 @@ export interface LiveSignal {
   signalTime: number | null; // 進入RETEST_CONFIRMED狀態的時間
   dataAgeMinutes: number | null;
   updatedAt: number;
+  closedReason: string | null; // NO_SESSION_TODAY狀態時的具體原因，例如「週末休市」「勞動節休市」
 }
 
 // 判斷「現在」（不是資料裡最後一根K棒的時間，是真實的當下）是不是CME期貨休市時間：
 // 每週休市（週五17:00 ET收盤，週日18:00 ET才重新開盤）或美股國定假日全天休市
 // （lib/usMarketHolidays.ts）。這幾種情況本來就不會有新資料，資料「延遲」是正常
 // 現象，不該被當成「資料異常」嚇使用者。
+// 回傳具體原因（「週末休市」或「XX休市」），不是布林值，這樣畫面才能顯示明確文字，
+// 不是只寫「非交易日」。沒有休市就回傳null。
 // 這裡沒有處理每日5-6PM ET的例行維護休市（比較短，且發生機率遇到使用者剛好在
 // 那個時間點打開App的機率低很多），這是已知、故意先不處理的簡化，不是遺漏。
-function isWeeklyMarketClosed(nowSec: number): boolean {
+function getMarketClosedReason(nowSec: number): string | null {
   const info = getETInfo(nowSec);
   const minutesNow = info.hour * 60 + info.minute;
   const fridayCloseMinutes = 17 * 60; // 週五17:00 ET
   const sundayOpenMinutes = 18 * 60; // 週日18:00 ET
-  if (info.weekday === "Sat") return true;
-  if (info.weekday === "Fri" && minutesNow >= fridayCloseMinutes) return true;
-  if (info.weekday === "Sun" && minutesNow < sundayOpenMinutes) return true;
-  if (isUsMarketHoliday(info.year, info.month, info.day)) return true;
-  return false;
+  const holidayName = getUsMarketHolidayName(info.year, info.month, info.day);
+  if (holidayName) return `${holidayName}休市`;
+  if (info.weekday === "Sat") return "週末休市";
+  if (info.weekday === "Fri" && minutesNow >= fridayCloseMinutes) return "週末休市";
+  if (info.weekday === "Sun" && minutesNow < sundayOpenMinutes) return "週末休市";
+  return null;
 }
 
 export function evaluateLiveSignal(
@@ -117,10 +121,12 @@ export function evaluateLiveSignal(
     signalTime: null,
     dataAgeMinutes: freshness.ageMinutes,
     updatedAt: Date.now(),
+    closedReason: null,
   };
 
-  if (isWeeklyMarketClosed(nowSec)) {
-    return { ...base, state: "NO_SESSION_TODAY" };
+  const closedReason = getMarketClosedReason(nowSec);
+  if (closedReason) {
+    return { ...base, state: "NO_SESSION_TODAY", closedReason };
   }
   if (candles5m.length === 0) return { ...base, state: "DATA_STALE" };
   if (!freshness.fresh) return { ...base, state: "DATA_STALE" };
@@ -238,6 +244,7 @@ export function evaluateLiveSignal(
     signalTime: candles5m[det.retestBarIdx].time,
     dataAgeMinutes: freshness.ageMinutes,
     updatedAt: Date.now(),
+    closedReason: null,
   };
 }
 
