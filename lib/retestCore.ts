@@ -1,5 +1,6 @@
 import { Candle } from "./yahooFutures";
 import { getETInfo } from "./etTime";
+import { isUsMarketHoliday } from "./usMarketHolidays";
 
 // 回踩策略核心偵測邏輯 — 唯一的真相來源（Single Source of Truth）。
 //
@@ -130,6 +131,9 @@ export function detectFromOpen(
 // 09:30K棒被誤判成有效開盤），這裡原本沒有同步到，現在補上，讓兩個專案的判斷邏輯
 // 一致。NQ這邊另外還有 retestEngine.ts 的 isWeeklyMarketClosed 做真實時間的週末判斷，
 // 這裡是第二層防護，不衝突。
+//
+// 【國定假日修正】同樣排除 lib/usMarketHolidays.ts 列出的美股全天休市日期——
+// 這份清單目前只到2026年底，每年要記得更新。
 export function findTodayOpenIdx(candles: Candle[]): number {
   if (candles.length === 0) return -1;
   const lastInfo = getETInfo(candles[candles.length - 1].time);
@@ -141,7 +145,8 @@ export function findTodayOpenIdx(candles: Candle[]): number {
       info.year === lastInfo.year &&
       info.month === lastInfo.month &&
       info.day === lastInfo.day &&
-      WEEKDAYS.includes(info.weekday)
+      WEEKDAYS.includes(info.weekday) &&
+      !isUsMarketHoliday(info.year, info.month, info.day)
     ) {
       return i;
     }
