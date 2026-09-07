@@ -125,6 +125,11 @@ export function detectFromOpen(
 
 // 找出 candles 陣列中，跟「最後一根K棒同一天」的09:30 ET K棒的index。
 // 用在即時引擎：只關心「今天」的開盤區間。
+//
+// 【跟crypto版本同步】crypto版本的retestCore.ts之前補過WEEKDAYS檢查（避免週末的
+// 09:30K棒被誤判成有效開盤），這裡原本沒有同步到，現在補上，讓兩個專案的判斷邏輯
+// 一致。NQ這邊另外還有 retestEngine.ts 的 isWeeklyMarketClosed 做真實時間的週末判斷，
+// 這裡是第二層防護，不衝突。
 export function findTodayOpenIdx(candles: Candle[]): number {
   if (candles.length === 0) return -1;
   const lastInfo = getETInfo(candles[candles.length - 1].time);
@@ -135,7 +140,8 @@ export function findTodayOpenIdx(candles: Candle[]): number {
       info.minute === 30 &&
       info.year === lastInfo.year &&
       info.month === lastInfo.month &&
-      info.day === lastInfo.day
+      info.day === lastInfo.day &&
+      WEEKDAYS.includes(info.weekday)
     ) {
       return i;
     }
