@@ -12,20 +12,28 @@
 // 2027年的日期目前還沒有查證到完整、可信的版本，先不寫進來，避免寫錯日期。
 // 每年年底記得回來更新這份清單，加上下一年度的日期，不然過了2026年12月31日之後，
 // 系統會誤判2027年的假日成有效交易日。
-export const US_MARKET_HOLIDAYS_2026 = new Set([
-  "2026-01-01", // 元旦
-  "2026-01-19", // 馬丁路德金紀念日
-  "2026-02-16", // 華盛頓誕辰日
-  "2026-04-03", // 耶穌受難日
-  "2026-05-25", // 陣亡將士紀念日
-  "2026-06-19", // 六月節
-  "2026-07-03", // 獨立日（7/4是週六，提前到週五）
-  "2026-09-07", // 勞動節
-  "2026-11-26", // 感恩節
-  "2026-12-25", // 聖誕節
-]);
+export const US_MARKET_HOLIDAYS_2026: Record<string, string> = {
+  "2026-01-01": "元旦",
+  "2026-01-19": "馬丁路德金紀念日",
+  "2026-02-16": "華盛頓誕辰日",
+  "2026-04-03": "耶穌受難日",
+  "2026-05-25": "陣亡將士紀念日",
+  "2026-06-19": "六月節",
+  "2026-07-03": "獨立日", // 7/4是週六，提前到週五
+  "2026-09-07": "勞動節",
+  "2026-11-26": "感恩節",
+  "2026-12-25": "聖誕節",
+};
+
+function dateKey(year: number, month: number, day: number): string {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
 
 export function isUsMarketHoliday(year: number, month: number, day: number): boolean {
-  const key = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-  return US_MARKET_HOLIDAYS_2026.has(key);
+  return dateKey(year, month, day) in US_MARKET_HOLIDAYS_2026;
+}
+
+// 回傳假日名稱（例如「勞動節」），不是假日就回傳null。用在畫面顯示「XX休市」。
+export function getUsMarketHolidayName(year: number, month: number, day: number): string | null {
+  return US_MARKET_HOLIDAYS_2026[dateKey(year, month, day)] ?? null;
 }
