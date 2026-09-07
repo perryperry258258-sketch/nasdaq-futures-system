@@ -2,6 +2,7 @@ import { Candle } from "./yahooFutures";
 import { getETInfo } from "./etTime";
 import { roundTripCostPoints } from "./futuresCost";
 import { detectFromOpen, WEEKDAYS, MAX_TRACK_BARS } from "./retestCore";
+import { isUsMarketHoliday } from "./usMarketHolidays";
 
 // 回踩策略 Phase 3 — 真正的TP/SL交易模擬。
 //
@@ -61,7 +62,11 @@ export function runRetestStrategyBacktest(
 
   for (let i = 0; i < candles5m.length - windowBars - MAX_TRACK_BARS; i++) {
     const info = getETInfo(candles5m[i].time);
-    if (info.hour !== 9 || info.minute !== 30 || !WEEKDAYS.includes(info.weekday)) continue;
+    // 【國定假日修正】跟即時引擎（retestCore.ts的findTodayOpenIdx）同步，排除美股全天
+    // 休市的國定假日（lib/usMarketHolidays.ts，目前只列到2026年底）。這份80筆樣本外
+    // 資料是在這次修正之前跑出來、已經存進oosSeed.ts的，不會回頭改變；這裡只影響
+    // 「以後如果重新跑一次回測」的結果會不會排除掉假日。
+    if (info.hour !== 9 || info.minute !== 30 || !WEEKDAYS.includes(info.weekday) || isUsMarketHoliday(info.year, info.month, info.day)) continue;
 
     // 確認這windowBars根K棒本身連續(沒有資料缺口)，這是回測特有的資料品質檢查，
     // 即時引擎不需要這個檢查(即時資料源假設本身連續)。
