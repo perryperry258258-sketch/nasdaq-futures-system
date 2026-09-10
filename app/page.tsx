@@ -8,6 +8,7 @@ import { getDisplayInfo } from "@/lib/statusDisplay";
 import { OOS_SEED } from "@/lib/oosSeed";
 import { upsertFromLiveSignal, loadSignalRecords } from "@/lib/signalLog";
 import { getNotificationPermission, requestNotificationPermission, showNotification, NotificationPermissionStatus } from "@/lib/notifications";
+import EconomicEventBanner from "@/components/EconomicEventBanner";
 
 // 首頁：即時訊號 + 策略驗證狀態。
 //
@@ -142,6 +143,10 @@ export default function HomePage() {
           ❌ {error}
         </div>
       )}
+
+      {/* 總經事件提醒（FOMC/CPI/非農），未來24小時內有才會顯示——NQ是美股期貨，
+          受這些事件影響通常比crypto更直接。 */}
+      <EconomicEventBanner />
 
       {/* 目前交易機會 */}
       {signal && info && (
