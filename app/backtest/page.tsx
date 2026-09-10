@@ -2,34 +2,35 @@
 
 import { useState } from "react";
 import { Candle } from "@/lib/yahooFutures";
-import { resampleCandles } from "@/lib/resample";
+import { loadNqHistoricalCandles, NQ_HISTORY_INFO } from "@/lib/nqHistoricalData";
 import { runRetestStrategyBacktest, auditRetestStrategy, splitTrainValOOS, RetestStrategyReport, RetestTrade } from "@/lib/retestStrategyLab";
 import { runMonteCarlo, MonteCarloResult } from "@/lib/monteCarlo";
 
-// 正式回測頁：從Databento抓真正的2年NQ期貨1分鐘資料（會產生費用，抓一次大約$3.85美金，
-// 已經事先查過價），合併成5分鐘K線，跑跟crypto版本完全同一套回踩策略引擎（訓練/驗證/
-// 樣本外三段切分），最後可以匯出結果讓使用者貼給我刻進程式碼，不用重複花錢再抓一次。
+// 正式回測頁——改版：原本每次都要呼叫Databento付費API（一次約$3.85美金），
+// 現在改成讀取內建的歷史快照（lib/nqHistoricalData.ts，2026-09買的那份5年資料），
+// 不用再花錢，也不用等好幾分鐘分月抓取，讀取一次之後在瀏覽器裡直接切期間、換窗口
+// 重跑，跟crypto版本一樣可以自由調整參數。
 //
-// 一次呼叫API不會抓兩年份（Vercel serverless function有執行時間限制），這裡切成
-// 一個月一個月抓，抓完在瀏覽器裡合併。
+// 【跟原本付費版本的差異，誠實揭露】
+// - 資料是固定快照，不會即時更新，回測結果只反映到 NQ_HISTORY_INFO.endTime 為止
+// - 如果之後想要更新的資料，要重新跟Databento買一次、重新產生快照檔案
+// - 原本按月呼叫API的 /api/databento-history 路由還留著沒有刪除，需要真正重新抓最新
+//   資料時還能用，只是這個頁面預設改用免費的內建快照
 
-const ENGINE_WINDOW = 60;
+const DURATION_OPTIONS = [
+  { label: "90天", days: 90 },
+  { label: "180天（半年）", days: 180 },
+  { label: "365天（1年）", days: 365 },
+  { label: "730天（2年）", days: 730 },
+  { label: "1825天（5年，全部資料）", days: 1825 },
+];
+const WINDOW_OPTIONS: { label: string; value: 30 | 60 | 90 | 120 }[] = [
+  { label: "30分鐘", value: 30 },
+  { label: "60分鐘", value: 60 },
+  { label: "90分鐘", value: 90 },
+  { label: "120分鐘", value: 120 },
+];
 const ENGINE_TP = 1;
-
-function monthChunks(totalDays: number): { start: string; end: string }[] {
-  const chunks: { start: string; end: string }[] = [];
-  const end = new Date();
-  let cursor = new Date(end.getTime() - totalDays * 86400 * 1000);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  while (cursor < end) {
-    const chunkEnd = new Date(cursor);
-    chunkEnd.setDate(chunkEnd.getDate() + 30);
-    const actualEnd = chunkEnd > end ? end : chunkEnd;
-    chunks.push({ start: fmt(cursor), end: fmt(actualEnd) });
-    cursor = actualEnd;
-  }
-  return chunks;
-}
 
 function RetestStrategyCard({ r }: { r: RetestStrategyReport }) {
   return (
@@ -71,7 +72,8 @@ function RetestStrategyCard({ r }: { r: RetestStrategyReport }) {
 }
 
 export default function BacktestPage() {
-  const [days, setDays] = useState(730);
+  const [days, setDays] = useState(1825);
+  const [window, setWindowMinutes] = useState<30 | 60 | 90 | 120>(60);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -84,30 +86,23 @@ export default function BacktestPage() {
     setError(null);
     setTrades(null);
     setExportText(null);
-    const chunks = monthChunks(days);
-    let allOneMin: Candle[] = [];
-    for (let i = 0; i < chunks.length; i++) {
-      setProgress(`抓取 ${chunks[i].start} ~ ${chunks[i].end}（${i + 1}/${chunks.length}）…`);
-      try {
-        const res = await fetch(`/api/databento-history?start=${chunks[i].start}&end=${chunks[i].end}`);
-        const data = await res.json();
-        if (!res.ok || data.error) {
-          setError(`${chunks[i].start} 這段抓取失敗：${data.error ?? `HTTP ${res.status}`}`);
-          setLoading(false);
-          return;
-        }
-        allOneMin = allOneMin.concat(data.candles ?? []);
-      } catch (err) {
-        setError(`${chunks[i].start} 這段抓取失敗：${(err as Error).message}`);
+    try {
+      setProgress("讀取內建歷史資料中…");
+      const all = await loadNqHistoricalCandles();
+      const cutoff = NQ_HISTORY_INFO.endTime - days * 86400;
+      const sliced: Candle[] = all.filter((c) => c.time >= cutoff);
+      if (sliced.length < 500) {
+        setError("這個期間內的資料不足以執行回測，請選更長的期間。");
         setLoading(false);
+        setProgress("");
         return;
       }
+      setProgress("執行回踩策略回測中…");
+      const allTrades = runRetestStrategyBacktest("NQ", sliced, window, ENGINE_TP);
+      setTrades(allTrades);
+    } catch (err) {
+      setError((err as Error).message);
     }
-    setProgress("合併成5分鐘K線、執行回測…");
-    allOneMin.sort((a, b) => a.time - b.time);
-    const candles5m = resampleCandles(allOneMin, 5);
-    const allTrades = runRetestStrategyBacktest("NQ", candles5m, ENGINE_WINDOW, ENGINE_TP);
-    setTrades(allTrades);
     setLoading(false);
     setProgress("");
   };
@@ -137,7 +132,7 @@ export default function BacktestPage() {
       expectancy: oosReport.expectancy,
       profitFactor: oosReport.profitFactor,
       maxDrawdownR: oosReport.maxDrawdownR,
-      windowMinutes: ENGINE_WINDOW,
+      windowMinutes: window,
       tpMultiple: ENGINE_TP,
       computedAt: Date.now(),
     };
@@ -160,20 +155,42 @@ export default function BacktestPage() {
     <main className="max-w-md mx-auto px-4 pt-8 pb-10">
       <header className="mb-4">
         <h1 className="text-xl font-display font-bold tracking-tight">NQ 正式回測</h1>
-        <div className="text-xs text-warn mt-2 leading-relaxed">
-          ⚠️ 這會真的呼叫Databento下載資料，產生費用（2年份大約$3.85美金，已經查過價）。抓取時間可能要幾分鐘，請保持螢幕開啟。
+        <div className="text-xs text-subtext mt-2 leading-relaxed">
+          用內建的歷史快照（{NQ_HISTORY_INFO.boughtAt}向Databento購買，涵蓋5年），不用花錢、不用等分批抓取。快照不會自動更新，之後想涵蓋更新的資料要重新買一次。
         </div>
       </header>
 
       <div className="rounded-2xl border border-border bg-panel p-4 mb-4">
-        <label className="text-xs text-subtext mb-1 block">回測天數</label>
-        <input
-          type="number"
-          value={days}
-          onChange={(e) => setDays(Number(e.target.value))}
-          className="w-full bg-panel2 border border-border rounded-xl px-3 text-sm numeric-safe mb-3"
-          style={{ minHeight: 44 }}
-        />
+        <div className="mb-3">
+          <label className="text-xs text-subtext mb-1 block">觀察窗口</label>
+          <select
+            value={window}
+            onChange={(e) => setWindowMinutes(Number(e.target.value) as 30 | 60 | 90 | 120)}
+            className="w-full bg-panel2 border border-border rounded-xl px-3 text-sm"
+            style={{ minHeight: 44 }}
+          >
+            {WINDOW_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="mb-3">
+          <label className="text-xs text-subtext mb-1 block">回測期間（從快照最後一天往回算）</label>
+          <select
+            value={days}
+            onChange={(e) => setDays(Number(e.target.value))}
+            className="w-full bg-panel2 border border-border rounded-xl px-3 text-sm"
+            style={{ minHeight: 44 }}
+          >
+            {DURATION_OPTIONS.map((o) => (
+              <option key={o.days} value={o.days}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <button onClick={runBacktest} disabled={loading} className="btn-primary w-full bg-accent/20 text-accent border border-accent/40 text-sm">
           {loading ? progress || "執行中…" : "開始回測"}
         </button>
@@ -208,7 +225,7 @@ export default function BacktestPage() {
           <div className="rounded-2xl border border-border bg-panel p-4 mb-4">
             <div className="text-sm font-semibold mb-2">💾 匯出樣本外資料</div>
             <div className="text-xs text-subtext mb-3 leading-relaxed">
-              產生文字後複製貼給我，我把它寫進程式碼裡當內建預設值，之後不用再花錢重抓。
+              產生文字後複製貼給我，我把它寫進程式碼裡當內建預設值（lib/oosSeed.ts）。
             </div>
             <button onClick={buildExport} className="btn-primary w-full border border-border bg-panel2 text-sm mb-3">
               產生匯出文字
