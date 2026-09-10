@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadSignalRecords, auditSignalRecords, SignalRecord } from "@/lib/signalLog";
+import { loadSignalRecords, auditSignalRecords, deleteSignalRecord, SignalRecord } from "@/lib/signalLog";
 
 type Tab = "ALL" | "WIN" | "LOSS";
 
@@ -16,6 +16,12 @@ export default function HistoryPage() {
   useEffect(() => {
     setRecords(loadSignalRecords());
   }, []);
+
+  const handleDelete = (id: string) => {
+    if (!window.confirm("確定要刪除這筆紀錄嗎？")) return;
+    deleteSignalRecord(id);
+    setRecords(loadSignalRecords());
+  };
 
   const resolved = records.filter((r) => r.status !== "OPEN");
   const filtered =
@@ -88,9 +94,14 @@ export default function HistoryPage() {
                       {r.direction === "LONG" ? "做多" : "做空"}
                     </span>
                   </div>
-                  <span className={`text-sm font-semibold numeric-safe ${(r.rMultiple ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
-                    {r.rMultiple != null ? `${r.rMultiple >= 0 ? "+" : ""}${r.rMultiple.toFixed(2)}R` : "—"}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-semibold numeric-safe ${(r.rMultiple ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+                      {r.rMultiple != null ? `${r.rMultiple >= 0 ? "+" : ""}${r.rMultiple.toFixed(2)}R` : "—"}
+                    </span>
+                    <button onClick={() => handleDelete(r.id)} aria-label="刪除" className="text-bear text-xs px-1">
+                      刪除
+                    </button>
+                  </div>
                 </div>
                 <div className="text-xs text-subtext">
                   進場 {fmtPrice(r.entryPrice)} → 止盈 {fmtPrice(r.takeProfit)}
