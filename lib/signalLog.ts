@@ -103,6 +103,13 @@ export function upsertFromLiveSignal(s: LiveSignal, tpMultiple: number): void {
   }
 }
 
+// 手動刪除單筆訊號紀錄——給「歷史」頁用，讓使用者可以自己清掉錯誤或不想要的紀錄。
+// 跟crypto專案的做法同步過來。
+export function deleteSignalRecord(id: string): void {
+  const records = loadSignalRecords();
+  saveSignalRecords(records.filter((r) => r.id !== id));
+}
+
 export interface PaperReport {
   sampleCount: number;
   winRate: number;
