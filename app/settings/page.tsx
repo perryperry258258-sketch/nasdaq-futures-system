@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { getNotificationPermission, requestNotificationPermission, NotificationPermissionStatus } from "@/lib/notifications";
-import { OOS_SEED } from "@/lib/oosSeed";
-import { NQ_POINT_VALUE_USD, NQ_TICK_SIZE, COMMISSION_USD_PER_SIDE, SLIPPAGE_TICKS_PER_SIDE } from "@/lib/futuresCost";
 
 export default function SettingsPage() {
   const [notifPermission, setNotifPermission] = useState<NotificationPermissionStatus>("default");
@@ -23,52 +22,16 @@ export default function SettingsPage() {
         <h1 className="text-xl font-display font-bold tracking-tight">設定</h1>
       </header>
 
-      {/* 交易設定（唯讀） */}
+      {/* 交易設定與成本模型：完整的回測參數/驗證結果/成本假設在「回測」頁看，
+          這裡不重複顯示唯讀數值——跟crypto版本的簡化方式同步。 */}
       <section className="rounded-2xl border border-border bg-panel p-4 mb-3">
-        <div className="text-sm font-semibold mb-1">交易設定</div>
+        <div className="text-sm font-semibold mb-1">交易設定與成本模型</div>
         <div className="text-xs text-subtext mb-3 leading-relaxed">
-          目前使用中的參數，跟已經完成樣本外驗證的回測綁定，暫不開放調整。
+          觀察窗口/回踩容忍度/止盈倍數這些參數，跟已經完成樣本外驗證的回測綁定在一起，暫不開放在這裡調整；手續費/滑價成本模型是估計值，正式使用前應該換成你自己帳戶的真實數字。完整的回測工具跟驗證結果在「回測」頁。
         </div>
-        <div className="space-y-2 text-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-subtext">觀察窗口</span>
-            <span className="numeric-safe font-medium">60 分鐘</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-subtext">回踩容忍度</span>
-            <span className="numeric-safe font-medium">±0.3%</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-subtext">止盈設定</span>
-            <span className="numeric-safe font-medium">{OOS_SEED.summary.tpMultiple}R</span>
-          </div>
-        </div>
-      </section>
-
-      {/* 成本模型（唯讀） */}
-      <section className="rounded-2xl border border-border bg-panel p-4 mb-3">
-        <div className="text-sm font-semibold mb-1">交易成本模型</div>
-        <div className="text-xs text-subtext mb-3 leading-relaxed">
-          這是估計值，不是你實際券商的真實費率，正式使用前應該換成你自己帳戶的數字。
-        </div>
-        <div className="space-y-2 text-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-subtext">合約點值</span>
-            <span className="numeric-safe font-medium">${NQ_POINT_VALUE_USD}/點</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-subtext">最小跳動</span>
-            <span className="numeric-safe font-medium">{NQ_TICK_SIZE}點</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-subtext">單邊手續費估計</span>
-            <span className="numeric-safe font-medium">${COMMISSION_USD_PER_SIDE}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-subtext">單邊滑價估計</span>
-            <span className="numeric-safe font-medium">{SLIPPAGE_TICKS_PER_SIDE}個跳動</span>
-          </div>
-        </div>
+        <Link href="/backtest" className="text-xs text-bull inline-block">
+          查看完整回測與驗證工具 →
+        </Link>
       </section>
 
       {/* 通知設定 */}
@@ -116,11 +79,11 @@ export default function SettingsPage() {
           </div>
           <div className="flex items-center justify-between">
             <span className="text-subtext">回測期間</span>
-            <span className="numeric-safe">2年（NQ.c.0連續合約）</span>
+            <span className="numeric-safe">5年（NQ連續合約，快照，2026-09-10購買）</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-subtext">回測費用</span>
-            <span className="numeric-safe">約$3.85美金（已完成，不用重抓）</span>
+            <span className="numeric-safe">約$9.50美金（已完成，不用重抓）</span>
           </div>
         </div>
       </details>
