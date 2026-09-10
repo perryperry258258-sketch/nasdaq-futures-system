@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-// 底部導覽——只有3個項目（首頁/歷史/設定），跟crypto版本的5項不一樣，
-// 因為這個App目前只監控單一商品(NQ)，沒有「機會」「市場」這種需要列表/篩選
-// 多個商品的頁面需求，首頁本身就已經是完整的單一商品狀態畫面。
+// 底部導覽——4個項目（首頁/回測/歷史/設定）。2026-09新增「回測」，原本沒有
+// 因為要花錢呼叫Databento付費API才能跑，現在改成讀內建的歷史快照（免費、
+// 不用等），值得放進主導覽讓使用者容易找到。
 
 function IconHome({ active }: { active: boolean }) {
   return (
@@ -24,6 +24,14 @@ function IconHistory({ active }: { active: boolean }) {
     </svg>
   );
 }
+function IconBacktest({ active }: { active: boolean }) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 3v18h18" />
+      <path d="M18.7 8 13 13.7l-4-4L3 16" />
+    </svg>
+  );
+}
 function IconSettings({ active }: { active: boolean }) {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -35,6 +43,7 @@ function IconSettings({ active }: { active: boolean }) {
 
 const items = [
   { href: "/", label: "首頁", Icon: IconHome },
+  { href: "/backtest", label: "回測", Icon: IconBacktest },
   { href: "/history", label: "歷史", Icon: IconHistory },
   { href: "/settings", label: "設定", Icon: IconSettings },
 ];
@@ -47,7 +56,7 @@ export default function BottomNav() {
       className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-panel"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
-      <div className="max-w-md mx-auto grid grid-cols-3">
+      <div className="max-w-md mx-auto grid grid-cols-4">
         {items.map(({ href, label, Icon }) => {
           const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
           return (
