@@ -5,6 +5,11 @@ import BottomNav from "@/components/BottomNav";
 export const metadata: Metadata = {
   title: "NQ Signal",
   description: "納斯達克期貨回踩訊號系統，僅供決策參考，非投資建議，不保證獲利。",
+  manifest: "/manifest.json",
+  icons: {
+    icon: "/icon-192.png",
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export const viewport: Viewport = {
