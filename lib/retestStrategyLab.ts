@@ -44,7 +44,13 @@ const DEFAULT_RETEST_ZONE_PCT = 0.3;
 // 導致回測把「價格根本沒有真正靠近進場水平」的情況也誤判成「回踩確認」，
 // 高估了訊號數量跟勝率。詳細原因見 lib/retestCore.ts 頂部註解，這裡改成呼叫
 // detectFromOpen時帶上"points"模式，跟即時引擎（retestEngine.ts）同步。
-const NQ_RETEST_TOLERANCE_POINTS = 5;
+//
+// 【2026-09再更新：容忍度改成可調參數】5點只是估計值，不是精算出來的最佳值。
+// 修正後跑出來獲利因子只剩1.46（比修正前的3.98薄弱很多），使用者想測試不同
+// 容忍度數值的敏感度，看5點是不是太嚴（把真正有效的回踩也排除掉）或太鬆
+// （還是漏掉一些假回踩），所以拔掉寫死的常數，改成呼叫端可以自己指定，
+// 預設值還是5，沒有傳參數的舊呼叫方式行為不變。
+const DEFAULT_NQ_RETEST_TOLERANCE_POINTS = 5;
 
 export interface RetestTrade {
   symbol: string;
@@ -77,7 +83,8 @@ export function runRetestStrategyBacktest(
   candles5m: Candle[],
   windowMinutes: 30 | 60 | 90 | 120,
   tpMultiple: number,
-  retestZonePct: number = DEFAULT_RETEST_ZONE_PCT
+  retestZonePct: number = DEFAULT_RETEST_ZONE_PCT,
+  retestTolerancePoints: number = DEFAULT_NQ_RETEST_TOLERANCE_POINTS
 ): RetestTrade[] {
   const trades: RetestTrade[] = [];
   const windowBars = windowMinutes / 5;
@@ -103,7 +110,7 @@ export function runRetestStrategyBacktest(
     }
     if (!contiguous) continue;
 
-    const det = detectFromOpen(candles5m, i, windowBars, NQ_RETEST_TOLERANCE_POINTS, "points");
+    const det = detectFromOpen(candles5m, i, windowBars, retestTolerancePoints, "points");
     if (det.windowIncomplete || !det.refCandle || det.retestBarIdx === null || !det.direction || det.breakoutIdx === null) {
       continue; // 沒有出現回踩，或還沒收集滿觀察窗口，這次不進場
     }
