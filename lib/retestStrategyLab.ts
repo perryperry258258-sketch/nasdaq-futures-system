@@ -22,6 +22,14 @@ import { isUsMarketHoliday } from "./usMarketHolidays";
 // lib/futuresCost.ts 的「固定跳動點數+每口固定手續費」模型，不是crypto的百分比模型
 // （NQ一口合約市值動輒60萬美金，套用百分比模型會嚴重高估成本）。
 //
+// 【2026-09新增：真實點數欄位】使用者實際下單4天後發現：R值本身雖然對稱（贏輸都接近
+// 1R），但換算成真實點數/金額卻不對稱——原因是「1R代表多少點」取決於當天參考K棒的
+// 高低點範圍(riskDistance)，範圍寬的那天輸了就是輸很多點，範圍窄的那天贏了就只贏
+// 一點點。期貨是整數口數下單，沒辦法像加密貨幣那樣用百分比動態調整部位大小去抵銷
+// 這個差異，所以「R值對稱」不代表「實際點數/金額對稱」。這裡把每筆交易的riskDistance
+// （這筆交易1R代表幾點）跟pointsGained（這筆交易實際賺賠幾點，已扣成本）都存下來，
+// 讓使用者可以直接看真實點數分布，不是只看R值。
+//
 // 【誠實揭露：這次沒做的】
 // - 只測「等回踩」這個進場方式，不重複測直接進場（已證實較差）
 // - 停損只測Reference區間對側，沒有測ATR停損或其他停損倍數
@@ -47,6 +55,13 @@ export interface RetestTrade {
   stopLoss: number;
   takeProfit: number;
   rMultiple: number;
+  // 【新增】這筆交易「1R」實際代表幾點——就是參考K棒的高低點範圍(也是停損距離)。
+  // 不同天的參考K棒範圍不一樣，所以不同交易的riskDistance不會一樣，這正是R值對稱、
+  // 但真實點數不對稱的根本原因。
+  riskDistance: number;
+  // 【新增】這筆交易實際賺賠幾點（已扣手續費+滑價成本），= rMultiple * riskDistance。
+  // 這才是整數口數下單時，你帳戶實際會變動的點數（乘上NQ每點金額才是美金損益）。
+  pointsGained: number;
   result: "WIN" | "LOSS" | "TIMEEXIT";
 }
 
@@ -136,6 +151,7 @@ export function runRetestStrategyBacktest(
       direction === "LONG" ? (exitPrice - entryPrice) / riskDistance : (entryPrice - exitPrice) / riskDistance;
     const costR = roundTripCostPoints() / riskDistance;
     const rMultiple = grossR - costR;
+    const pointsGained = rMultiple * riskDistance;
     const retestBar = candles5m[retestBarIdx];
     const retestPrice = direction === "LONG" ? retestBar.low : retestBar.high;
 
@@ -155,6 +171,8 @@ export function runRetestStrategyBacktest(
       stopLoss,
       takeProfit,
       rMultiple,
+      riskDistance,
+      pointsGained,
       result,
     });
 
@@ -173,6 +191,12 @@ export interface RetestStrategyReport {
   profitFactor: number;
   maxDrawdownR: number;
   maxConsecutiveLosses: number;
+  // 【新增】點數版統計——跟上面R值版本並列，讓使用者直接看真實點數，
+  // 不用自己拿rMultiple乘riskDistance換算。
+  totalPoints: number;
+  avgWinPoints: number; // 正數
+  avgLossPoints: number; // 負數
+  maxDrawdownPoints: number;
 }
 
 export function auditRetestStrategy(trades: RetestTrade[], label: string): RetestStrategyReport {
@@ -186,9 +210,18 @@ export function auditRetestStrategy(trades: RetestTrade[], label: string): Retes
   const grossLoss = Math.abs(trades.filter((t) => t.rMultiple <= 0).reduce((a, t) => a + t.rMultiple, 0));
   const profitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0;
 
+  const totalPoints = trades.reduce((a, t) => a + t.pointsGained, 0);
+  const winsForPoints = trades.filter((t) => t.pointsGained > 0);
+  const lossesForPoints = trades.filter((t) => t.pointsGained <= 0);
+  const avgWinPoints = winsForPoints.length ? winsForPoints.reduce((a, t) => a + t.pointsGained, 0) / winsForPoints.length : 0;
+  const avgLossPoints = lossesForPoints.length ? lossesForPoints.reduce((a, t) => a + t.pointsGained, 0) / lossesForPoints.length : 0;
+
   let cum = 0;
   let peak = 0;
   let maxDD = 0;
+  let cumPoints = 0;
+  let peakPoints = 0;
+  let maxDDPoints = 0;
   let consec = 0;
   let maxConsec = 0;
   trades.forEach((t) => {
@@ -196,6 +229,12 @@ export function auditRetestStrategy(trades: RetestTrade[], label: string): Retes
     if (cum > peak) peak = cum;
     const dd = peak - cum;
     if (dd > maxDD) maxDD = dd;
+
+    cumPoints += t.pointsGained;
+    if (cumPoints > peakPoints) peakPoints = cumPoints;
+    const ddPoints = peakPoints - cumPoints;
+    if (ddPoints > maxDDPoints) maxDDPoints = ddPoints;
+
     if (t.rMultiple <= 0) {
       consec++;
       if (consec > maxConsec) maxConsec = consec;
@@ -213,6 +252,10 @@ export function auditRetestStrategy(trades: RetestTrade[], label: string): Retes
     profitFactor,
     maxDrawdownR: maxDD,
     maxConsecutiveLosses: maxConsec,
+    totalPoints,
+    avgWinPoints,
+    avgLossPoints,
+    maxDrawdownPoints: maxDDPoints,
   };
 }
 
