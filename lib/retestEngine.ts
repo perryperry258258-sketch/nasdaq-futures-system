@@ -26,6 +26,16 @@ import { getUsMarketHolidayName } from "./usMarketHolidays";
 //
 // 【驗收第6項】同一個Reference Candle最多一個交易事件：Reference Candle 綁定「今天的
 // 09:30那根K棒」，一天只有一根，所以結構上不可能對同一個Reference Candle重複產生訊號。
+//
+// 【2026-09修正：回踩容忍度改成固定點數】原本傳給detectFromOpen的retestZonePct被當成
+// 百分比計算，在NQ現在28000+的價位下，0.3%換算出來高達87點，遠超過合理的回踩容忍
+// 範圍，導致系統在價格根本還沒真正靠近進場水平時就誤判「回踩確認」（實單交易時
+// 發現：9/14訊號顯示進場28932，人工看盤價格根本沒回踩到，系統卻已經記錄獲利52點）。
+// 現在改成呼叫detectFromOpen時帶上"points"模式，NQ_RETEST_TOLERANCE_POINTS是固定
+// 點數，不受NQ價格高低影響。這個數字（5點）是估計值，比典型的riskDistance
+// （通常60~150點）小很多，如果之後回測發現退場太嚴格或太寬鬆，這個數字可以再調整。
+
+const NQ_RETEST_TOLERANCE_POINTS = 5;
 
 export type SignalState =
   | "DATA_STALE"
@@ -138,7 +148,7 @@ export function evaluateLiveSignal(
   }
 
   const windowBars = windowMinutes / 5;
-  const det = detectFromOpen(candles5m, openIdx, windowBars, retestZonePct);
+  const det = detectFromOpen(candles5m, openIdx, windowBars, NQ_RETEST_TOLERANCE_POINTS, "points");
 
   if (det.windowIncomplete) return { ...base, state: "SETUP" };
 
