@@ -3,10 +3,19 @@
 import { useEffect, useState } from "react";
 import { loadSignalRecords, auditSignalRecords, deleteSignalRecord, SignalRecord } from "@/lib/signalLog";
 
+// 【2026-09更新：改成以點數為主要顯示】原本畫面主要顯示R值，使用者實單交易後
+// 發現R值對稱不代表真實點數對稱（原因見 lib/signalLog.ts 頂部註解）。這裡改成
+// 每筆紀錄、還有上方摘要，都以真實點數為主要顯示，R值不再顯示在畫面上
+// （資料還留在SignalRecord裡，只是不放在UI上）。
+
 type Tab = "ALL" | "WIN" | "LOSS";
 
 function fmtPrice(n: number) {
   return n >= 1 ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : n.toPrecision(4);
+}
+
+function fmtPoints(n: number) {
+  return `${n >= 0 ? "+" : ""}${n.toFixed(1)}`;
 }
 
 export default function HistoryPage() {
@@ -38,7 +47,7 @@ export default function HistoryPage() {
 
       {report && report.sampleCount > 0 && (
         <section className="rounded-2xl border border-border bg-panel p-4 mb-4">
-          <div className="grid grid-cols-3 gap-2 text-center text-xs">
+          <div className="grid grid-cols-3 gap-2 text-center text-xs mb-3">
             <div>
               <div className="text-subtext">樣本數</div>
               <div className="font-semibold numeric-safe">{report.sampleCount}</div>
@@ -48,11 +57,20 @@ export default function HistoryPage() {
               <div className="font-semibold numeric-safe">{report.winRate.toFixed(1)}%</div>
             </div>
             <div>
-              <div className="text-subtext">期望值</div>
-              <div className={`font-semibold numeric-safe ${report.expectancy >= 0 ? "text-bull" : "text-bear"}`}>
-                {report.expectancy >= 0 ? "+" : ""}
-                {report.expectancy.toFixed(2)}R
+              <div className="text-subtext">總點數</div>
+              <div className={`font-semibold numeric-safe ${report.totalPoints >= 0 ? "text-bull" : "text-bear"}`}>
+                {fmtPoints(report.totalPoints)}
               </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-center text-xs border-t border-border/60 pt-2">
+            <div>
+              <div className="text-subtext">平均贏點數</div>
+              <div className="font-semibold numeric-safe text-bull">+{report.avgWinPoints.toFixed(1)}</div>
+            </div>
+            <div>
+              <div className="text-subtext">平均輸點數</div>
+              <div className="font-semibold numeric-safe text-bear">{report.avgLossPoints.toFixed(1)}</div>
             </div>
           </div>
         </section>
@@ -95,8 +113,8 @@ export default function HistoryPage() {
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className={`text-sm font-semibold numeric-safe ${(r.rMultiple ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
-                      {r.rMultiple != null ? `${r.rMultiple >= 0 ? "+" : ""}${r.rMultiple.toFixed(2)}R` : "—"}
+                    <span className={`text-sm font-semibold numeric-safe ${(r.pointsGained ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+                      {r.pointsGained != null ? `${fmtPoints(r.pointsGained)}點` : "—"}
                     </span>
                     <button onClick={() => handleDelete(r.id)} aria-label="刪除" className="text-bear text-xs px-1">
                       刪除
