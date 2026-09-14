@@ -65,17 +65,17 @@ function RetestStrategyCard({ r }: { r: RetestStrategyReport }) {
         </div>
         <div>
           <div className="text-subtext">最大回撤</div>
-          <div className="font-semibold numeric-safe text-bear">-{r.maxDrawdownR.toFixed(2)}R</div>
+          <div className="font-semibold numeric-safe text-bear">-{r.maxDrawdownPoints.toFixed(0)}點</div>
         </div>
         <div>
           <div className="text-subtext">最大連續虧損</div>
           <div className="font-semibold numeric-safe text-bear">{r.maxConsecutiveLosses}筆</div>
         </div>
       </div>
-      {/* 真實點數統計——跟上面R值統計並列，不是取代 */}
+      {/* 真實點數統計——總點數/平均贏輸點數，最大回撤已經改到上面主要統計格顯示 */}
       <div className="border-t border-border/60 pt-2 mt-1">
-        <div className="text-[10px] text-subtext mb-1.5">真實點數（已扣手續費+滑價）</div>
-        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+        <div className="text-[10px] text-subtext mb-1.5">真實點數（已扣手續費+滑價）・ R值僅供參考 {r.expectancy >= 0 ? "+" : ""}{r.expectancy.toFixed(2)}R / 最大回撤{r.maxDrawdownR.toFixed(2)}R</div>
+        <div className="grid grid-cols-2 gap-2 text-center text-xs">
           <div>
             <div className="text-subtext">總點數</div>
             <div className={`font-semibold numeric-safe ${r.totalPoints >= 0 ? "text-bull" : "text-bear"}`}>
@@ -90,10 +90,6 @@ function RetestStrategyCard({ r }: { r: RetestStrategyReport }) {
               {" / "}
               <span className="text-bear">{r.avgLossPoints.toFixed(0)}</span>
             </div>
-          </div>
-          <div>
-            <div className="text-subtext">最大回撤點數</div>
-            <div className="font-semibold numeric-safe text-bear">-{r.maxDrawdownPoints.toFixed(0)}</div>
           </div>
         </div>
       </div>
@@ -141,8 +137,11 @@ export default function BacktestPage() {
   const trainReport = oosSplit ? auditRetestStrategy(oosSplit.train, "訓練段（前60%）") : null;
   const valReport = oosSplit ? auditRetestStrategy(oosSplit.validation, "驗證段（中間20%）") : null;
   const oosReport = oosSplit ? auditRetestStrategy(oosSplit.oos, "樣本外段（最後20%，完全沒被看過）") : null;
+  // 【改成用真實點數重排，不是用R值】原因見上面「真實點數」註解——R值對稱不代表
+  // 點數對稱，蒙地卡羅重排如果拿R值去跑，算出來的回撤範圍會被「R值本身對稱」這個
+  // 假象誤導，看不出真實點數的回撤可能有多深。改用pointsGained，結果單位是點數。
   const oosMonteCarlo: MonteCarloResult | null =
-    oosSplit && oosSplit.oos.length >= 20 ? runMonteCarlo(oosSplit.oos.map((t) => t.rMultiple), 2000) : null;
+    oosSplit && oosSplit.oos.length >= 20 ? runMonteCarlo(oosSplit.oos.map((t) => t.pointsGained), 2000) : null;
 
   const verdict =
     trainReport && valReport && oosReport
@@ -250,15 +249,18 @@ export default function BacktestPage() {
           <RetestStrategyCard r={oosReport} />
           {oosMonteCarlo && (
             <div className="rounded-xl bg-panel2 p-3 mb-4">
-              <div className="text-xs font-semibold mb-2">蒙地卡羅重排（{oosMonteCarlo.simulations.toLocaleString()}次）</div>
+              <div className="text-xs font-semibold mb-2">蒙地卡羅重排（{oosMonteCarlo.simulations.toLocaleString()}次，單位：點數）</div>
+              <div className="text-[10px] text-subtext mb-2 leading-relaxed">
+                把這批交易的順序重排很多次，看真實點數的回撤範圍——不是重排R值，是直接重排每筆的真實點數，避免R值對稱掩蓋掉點數不對稱的風險。
+              </div>
               <div className="grid grid-cols-2 gap-2 text-center text-xs">
                 <div>
                   <div className="text-subtext">中位數回撤</div>
-                  <div className="font-semibold numeric-safe text-bear">-{oosMonteCarlo.p50DrawdownR.toFixed(2)}R</div>
+                  <div className="font-semibold numeric-safe text-bear">-{oosMonteCarlo.p50DrawdownR.toFixed(0)}點</div>
                 </div>
                 <div>
                   <div className="text-subtext">最壞情況</div>
-                  <div className="font-semibold numeric-safe text-bear">-{oosMonteCarlo.worstDrawdownR.toFixed(2)}R</div>
+                  <div className="font-semibold numeric-safe text-bear">-{oosMonteCarlo.worstDrawdownR.toFixed(0)}點</div>
                 </div>
               </div>
             </div>
