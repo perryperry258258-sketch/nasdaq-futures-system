@@ -39,6 +39,13 @@ import { isUsMarketHoliday } from "./usMarketHolidays";
 
 const DEFAULT_RETEST_ZONE_PCT = 0.3;
 
+// 【2026-09修正：回踩容忍度改成固定點數】原本retestZonePct被當成百分比計算，
+// 在NQ現在28000+的價位下，0.3%換算出來高達87點，遠超過合理的回踩容忍範圍，
+// 導致回測把「價格根本沒有真正靠近進場水平」的情況也誤判成「回踩確認」，
+// 高估了訊號數量跟勝率。詳細原因見 lib/retestCore.ts 頂部註解，這裡改成呼叫
+// detectFromOpen時帶上"points"模式，跟即時引擎（retestEngine.ts）同步。
+const NQ_RETEST_TOLERANCE_POINTS = 5;
+
 export interface RetestTrade {
   symbol: string;
   direction: "LONG" | "SHORT";
@@ -96,7 +103,7 @@ export function runRetestStrategyBacktest(
     }
     if (!contiguous) continue;
 
-    const det = detectFromOpen(candles5m, i, windowBars, retestZonePct);
+    const det = detectFromOpen(candles5m, i, windowBars, NQ_RETEST_TOLERANCE_POINTS, "points");
     if (det.windowIncomplete || !det.refCandle || det.retestBarIdx === null || !det.direction || det.breakoutIdx === null) {
       continue; // 沒有出現回踩，或還沒收集滿觀察窗口，這次不進場
     }
