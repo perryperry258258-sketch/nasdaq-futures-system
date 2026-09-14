@@ -36,6 +36,7 @@ const WINDOW_OPTIONS: { label: string; value: 30 | 60 | 90 | 120 }[] = [
   { label: "120分鐘", value: 120 },
 ];
 const ENGINE_TP = 1;
+const TOLERANCE_OPTIONS = [3, 5, 8, 10, 15, 20];
 
 function RetestStrategyCard({ r }: { r: RetestStrategyReport }) {
   return (
@@ -100,6 +101,7 @@ function RetestStrategyCard({ r }: { r: RetestStrategyReport }) {
 export default function BacktestPage() {
   const [days, setDays] = useState(1825);
   const [window, setWindowMinutes] = useState<30 | 60 | 90 | 120>(60);
+  const [tolerance, setTolerance] = useState(5);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -124,7 +126,7 @@ export default function BacktestPage() {
         return;
       }
       setProgress("執行回踩策略回測中…");
-      const allTrades = runRetestStrategyBacktest("NQ", sliced, window, ENGINE_TP);
+      const allTrades = runRetestStrategyBacktest("NQ", sliced, window, ENGINE_TP, 0.3, tolerance);
       setTrades(allTrades);
     } catch (err) {
       setError((err as Error).message);
@@ -163,6 +165,7 @@ export default function BacktestPage() {
       maxDrawdownR: oosReport.maxDrawdownR,
       windowMinutes: window,
       tpMultiple: ENGINE_TP,
+      retestTolerancePoints: tolerance,
       computedAt: Date.now(),
       // 【新增】點數版摘要一起匯出，方便之後不用重跑就能對照真實點數
       totalPoints: oosReport.totalPoints,
@@ -213,6 +216,21 @@ export default function BacktestPage() {
             {WINDOW_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="mb-3">
+          <label className="text-xs text-subtext mb-1 block">回踩容忍度（固定點數，不是百分比）</label>
+          <select
+            value={tolerance}
+            onChange={(e) => setTolerance(Number(e.target.value))}
+            className="w-full bg-panel2 border border-border rounded-xl px-3 text-sm"
+            style={{ minHeight: 44 }}
+          >
+            {TOLERANCE_OPTIONS.map((t) => (
+              <option key={t} value={t}>
+                {t}點{t === 5 ? "（目前即時引擎用這個）" : ""}
               </option>
             ))}
           </select>
