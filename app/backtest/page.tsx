@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Candle } from "@/lib/yahooFutures";
 import { loadNqHistoricalCandles, NQ_HISTORY_INFO } from "@/lib/nqHistoricalData";
 import { runRetestStrategyBacktest, auditRetestStrategy, splitTrainValOOS, RetestStrategyReport, RetestTrade } from "@/lib/retestStrategyLab";
+import { runBreakoutDirectBacktest, auditBreakoutStrategy, splitBreakoutTrainValOOS, BreakoutTrade } from "@/lib/breakoutStrategyLab";
 import { runMonteCarlo, MonteCarloResult } from "@/lib/monteCarlo";
 
 // 正式回測頁——改版：原本每次都要呼叫Databento付費API（一次約$3.85美金），
@@ -36,7 +37,7 @@ const WINDOW_OPTIONS: { label: string; value: 30 | 60 | 90 | 120 }[] = [
   { label: "120分鐘", value: 120 },
 ];
 const ENGINE_TP = 1;
-const TOLERANCE_OPTIONS = [3, 5, 8, 10, 15, 20];
+const TOLERANCE_OPTIONS = [3, 5, 8, 10, 15, 20, 30, 40, 60, 87];
 
 function RetestStrategyCard({ r }: { r: RetestStrategyReport }) {
   return (
@@ -102,10 +103,11 @@ export default function BacktestPage() {
   const [days, setDays] = useState(1825);
   const [window, setWindowMinutes] = useState<30 | 60 | 90 | 120>(60);
   const [tolerance, setTolerance] = useState(5);
+  const [mode, setMode] = useState<"retest" | "breakout">("retest");
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [trades, setTrades] = useState<RetestTrade[] | null>(null);
+  const [trades, setTrades] = useState<RetestTrade[] | BreakoutTrade[] | null>(null);
   const [exportText, setExportText] = useState<string | null>(null);
   const [exportCopied, setExportCopied] = useState(false);
 
@@ -125,8 +127,11 @@ export default function BacktestPage() {
         setProgress("");
         return;
       }
-      setProgress("執行回踩策略回測中…");
-      const allTrades = runRetestStrategyBacktest("NQ", sliced, window, ENGINE_TP, 0.3, tolerance);
+      setProgress(mode === "retest" ? "執行回踩策略回測中…" : "執行突破直接進場回測中…");
+      const allTrades =
+        mode === "retest"
+          ? runRetestStrategyBacktest("NQ", sliced, window, ENGINE_TP, 0.3, tolerance)
+          : runBreakoutDirectBacktest("NQ", sliced, window, ENGINE_TP);
       setTrades(allTrades);
     } catch (err) {
       setError((err as Error).message);
@@ -135,10 +140,16 @@ export default function BacktestPage() {
     setProgress("");
   };
 
-  const oosSplit = trades ? splitTrainValOOS(trades) : null;
-  const trainReport = oosSplit ? auditRetestStrategy(oosSplit.train, "訓練段（前60%）") : null;
-  const valReport = oosSplit ? auditRetestStrategy(oosSplit.validation, "驗證段（中間20%）") : null;
-  const oosReport = oosSplit ? auditRetestStrategy(oosSplit.oos, "樣本外段（最後20%，完全沒被看過）") : null;
+  const oosSplit =
+    trades && mode === "retest"
+      ? splitTrainValOOS(trades as RetestTrade[])
+      : trades && mode === "breakout"
+      ? splitBreakoutTrainValOOS(trades as BreakoutTrade[])
+      : null;
+  const auditFn = mode === "retest" ? auditRetestStrategy : auditBreakoutStrategy;
+  const trainReport = oosSplit ? auditFn(oosSplit.train as never, "訓練段（前60%）") : null;
+  const valReport = oosSplit ? auditFn(oosSplit.validation as never, "驗證段（中間20%）") : null;
+  const oosReport = oosSplit ? auditFn(oosSplit.oos as never, "樣本外段（最後20%，完全沒被看過）") : null;
   // 【改成用真實點數重排，不是用R值】原因見上面「真實點數」註解——R值對稱不代表
   // 點數對稱，蒙地卡羅重排如果拿R值去跑，算出來的回撤範圍會被「R值本身對稱」這個
   // 假象誤導，看不出真實點數的回撤可能有多深。改用pointsGained，結果單位是點數。
@@ -206,6 +217,40 @@ export default function BacktestPage() {
 
       <div className="rounded-2xl border border-border bg-panel p-4 mb-4">
         <div className="mb-3">
+          <label className="text-xs text-subtext mb-1 block">策略模式</label>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setMode("retest");
+                setTrades(null);
+                setExportText(null);
+              }}
+              className={`flex-1 rounded-xl text-sm py-2.5 border transition ${
+                mode === "retest" ? "bg-brand/15 text-brand border-brand/40" : "bg-panel2 text-subtext border-border"
+              }`}
+            >
+              回踩策略
+            </button>
+            <button
+              onClick={() => {
+                setMode("breakout");
+                setTrades(null);
+                setExportText(null);
+              }}
+              className={`flex-1 rounded-xl text-sm py-2.5 border transition ${
+                mode === "breakout" ? "bg-brand/15 text-brand border-brand/40" : "bg-panel2 text-subtext border-border"
+              }`}
+            >
+              突破直接進場
+            </button>
+          </div>
+          <div className="text-[10px] text-subtext mt-1.5 leading-relaxed">
+            {mode === "retest"
+              ? "等價格拉回到參考水平附近才進場，需要設定回踩容忍度。"
+              : "突破確認的當下直接用收盤價進場，不等拉回，完全獨立的另一套邏輯，用來檢驗「不等回踩、直接跟上突破」這個假說是不是真的有效，不是回踩容忍度調到最寬的結果。"}
+          </div>
+        </div>
+        <div className="mb-3">
           <label className="text-xs text-subtext mb-1 block">觀察窗口</label>
           <select
             value={window}
@@ -220,21 +265,23 @@ export default function BacktestPage() {
             ))}
           </select>
         </div>
-        <div className="mb-3">
-          <label className="text-xs text-subtext mb-1 block">回踩容忍度（固定點數，不是百分比）</label>
-          <select
-            value={tolerance}
-            onChange={(e) => setTolerance(Number(e.target.value))}
-            className="w-full bg-panel2 border border-border rounded-xl px-3 text-sm"
-            style={{ minHeight: 44 }}
-          >
-            {TOLERANCE_OPTIONS.map((t) => (
-              <option key={t} value={t}>
-                {t}點{t === 5 ? "（目前即時引擎用這個）" : ""}
-              </option>
-            ))}
-          </select>
-        </div>
+        {mode === "retest" && (
+          <div className="mb-3">
+            <label className="text-xs text-subtext mb-1 block">回踩容忍度（固定點數，不是百分比）</label>
+            <select
+              value={tolerance}
+              onChange={(e) => setTolerance(Number(e.target.value))}
+              className="w-full bg-panel2 border border-border rounded-xl px-3 text-sm"
+              style={{ minHeight: 44 }}
+            >
+              {TOLERANCE_OPTIONS.map((t) => (
+                <option key={t} value={t}>
+                  {t}點{t === 5 ? "（目前即時引擎用這個）" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="mb-3">
           <label className="text-xs text-subtext mb-1 block">回測期間（從快照最後一天往回算）</label>
           <select
@@ -311,4 +358,4 @@ export default function BacktestPage() {
       )}
     </main>
   );
-}
+              }
