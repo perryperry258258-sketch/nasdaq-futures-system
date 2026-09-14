@@ -16,6 +16,11 @@ import { runMonteCarlo, MonteCarloResult } from "@/lib/monteCarlo";
 // - 如果之後想要更新的資料，要重新跟Databento買一次、重新產生快照檔案
 // - 原本按月呼叫API的 /api/databento-history 路由還留著沒有刪除，需要真正重新抓最新
 //   資料時還能用，只是這個頁面預設改用免費的內建快照
+//
+// 【2026-09新增：真實點數統計】使用者實際下單4天後發現R值對稱但真實點數不對稱
+// （原因見 lib/retestStrategyLab.ts 頂部註解）。這裡在每個RetestStrategyCard多加一排
+// 點數統計（總點數/平均贏點數/平均輸點數/最大回撤點數），不取代R值統計、是並列顯示，
+// 讓使用者可以直接比較兩種角度。
 
 const DURATION_OPTIONS = [
   { label: "90天", days: 90 },
@@ -53,7 +58,7 @@ function RetestStrategyCard({ r }: { r: RetestStrategyReport }) {
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-3 gap-2 text-center text-xs">
+      <div className="grid grid-cols-3 gap-2 text-center text-xs mb-2">
         <div>
           <div className="text-subtext">獲利因子</div>
           <div className="font-semibold numeric-safe">{r.profitFactor === Infinity ? "∞" : r.profitFactor.toFixed(2)}</div>
@@ -65,6 +70,31 @@ function RetestStrategyCard({ r }: { r: RetestStrategyReport }) {
         <div>
           <div className="text-subtext">最大連續虧損</div>
           <div className="font-semibold numeric-safe text-bear">{r.maxConsecutiveLosses}筆</div>
+        </div>
+      </div>
+      {/* 真實點數統計——跟上面R值統計並列，不是取代 */}
+      <div className="border-t border-border/60 pt-2 mt-1">
+        <div className="text-[10px] text-subtext mb-1.5">真實點數（已扣手續費+滑價）</div>
+        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+          <div>
+            <div className="text-subtext">總點數</div>
+            <div className={`font-semibold numeric-safe ${r.totalPoints >= 0 ? "text-bull" : "text-bear"}`}>
+              {r.totalPoints >= 0 ? "+" : ""}
+              {r.totalPoints.toFixed(0)}
+            </div>
+          </div>
+          <div>
+            <div className="text-subtext">平均贏/輸點數</div>
+            <div className="font-semibold numeric-safe">
+              <span className="text-bull">+{r.avgWinPoints.toFixed(0)}</span>
+              {" / "}
+              <span className="text-bear">{r.avgLossPoints.toFixed(0)}</span>
+            </div>
+          </div>
+          <div>
+            <div className="text-subtext">最大回撤點數</div>
+            <div className="font-semibold numeric-safe text-bear">-{r.maxDrawdownPoints.toFixed(0)}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -135,8 +165,20 @@ export default function BacktestPage() {
       windowMinutes: window,
       tpMultiple: ENGINE_TP,
       computedAt: Date.now(),
+      // 【新增】點數版摘要一起匯出，方便之後不用重跑就能對照真實點數
+      totalPoints: oosReport.totalPoints,
+      avgWinPoints: oosReport.avgWinPoints,
+      avgLossPoints: oosReport.avgLossPoints,
+      maxDrawdownPoints: oosReport.maxDrawdownPoints,
     };
-    const tradesData = oosSplit.oos.map((t) => ({ rMultiple: t.rMultiple, entryTime: t.entryTime }));
+    // 【新增】riskDistance/pointsGained一起匯出，不是只有rMultiple——這樣拿到這份資料
+    // 就能直接看每一筆的真實點數，不用回頭重跑回測。
+    const tradesData = oosSplit.oos.map((t) => ({
+      rMultiple: t.rMultiple,
+      entryTime: t.entryTime,
+      riskDistance: t.riskDistance,
+      pointsGained: t.pointsGained,
+    }));
     setExportText(JSON.stringify({ summary, trades: tradesData }));
     setExportCopied(false);
   };
@@ -225,7 +267,7 @@ export default function BacktestPage() {
           <div className="rounded-2xl border border-border bg-panel p-4 mb-4">
             <div className="text-sm font-semibold mb-2">💾 匯出樣本外資料</div>
             <div className="text-xs text-subtext mb-3 leading-relaxed">
-              產生文字後複製貼給我，我把它寫進程式碼裡當內建預設值（lib/oosSeed.ts）。
+              產生文字後複製貼給我，我把它寫進程式碼裡當內建預設值（lib/oosSeed.ts）。這次也一起匯出每筆的真實點數，不是只有R值。
             </div>
             <button onClick={buildExport} className="btn-primary w-full border border-border bg-panel2 text-sm mb-3">
               產生匯出文字
