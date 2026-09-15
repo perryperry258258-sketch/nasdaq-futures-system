@@ -176,6 +176,22 @@ export function evaluateLiveSignal(
 
   const refLevel = det.direction === "LONG" ? det.refHigh! : det.refLow!;
 
+  // 【2026-09修正：跟crypto版本同步】進場價/止損/止盈其實在「已突破」的當下就能
+  // 算出來（方向已知、Reference Candle高低點已知），不需要等回踩確認才算——這裡
+  // 把計算提前到WAIT_RETEST也能用，純粹是「什麼時候把已經算好的數字顯示出來」的
+  // UI決定，不是新增或改變策略邏輯，止損/止盈的算法完全沒有變動。crypto版本本來
+  // 就有這個修正，NQ這邊當初沒有同步到，導致「已突破、等回踩」階段畫面上看不到
+  // 進出場點位，這次補齊。
+  const entryPrice = refLevel;
+  const stopLoss = det.direction === "LONG" ? det.refLow! : det.refHigh!;
+  const riskDistance = Math.abs(entryPrice - stopLoss);
+  const takeProfit =
+    riskDistance > 0
+      ? det.direction === "LONG"
+        ? entryPrice + riskDistance * tpMultiple
+        : entryPrice - riskDistance * tpMultiple
+      : null;
+
   if (det.retestBarIdx === null) {
     const expired = candles5m.length - 1 >= det.breakoutIdx + 48;
     const state: SignalState = det.closedBackThrough ? "EXPIRED" : expired ? "EXPIRED" : "WAIT_RETEST";
@@ -189,12 +205,13 @@ export function evaluateLiveSignal(
       refVolume: det.refCandle?.volume ?? null,
       breakoutTime: candles5m[det.breakoutIdx].time,
       currentPrice,
+      entryPrice: riskDistance > 0 ? entryPrice : null,
+      stopLoss: riskDistance > 0 ? stopLoss : null,
+      takeProfit,
+      riskDistance: riskDistance > 0 ? riskDistance : null,
     };
   }
 
-  const entryPrice = refLevel;
-  const stopLoss = det.direction === "LONG" ? det.refLow! : det.refHigh!;
-  const riskDistance = Math.abs(entryPrice - stopLoss);
   if (riskDistance <= 0) {
     return {
       ...base,
@@ -205,8 +222,6 @@ export function evaluateLiveSignal(
       currentPrice,
     };
   }
-  const takeProfit =
-    det.direction === "LONG" ? entryPrice + riskDistance * tpMultiple : entryPrice - riskDistance * tpMultiple;
 
   let state: SignalState = "RETEST_CONFIRMED";
   for (let j = det.retestBarIdx; j < candles5m.length; j++) {
