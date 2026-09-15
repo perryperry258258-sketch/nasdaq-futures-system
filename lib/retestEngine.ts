@@ -231,7 +231,7 @@ export function evaluateLiveSignal(
         state = "SL_HIT";
         break;
       }
-      if (bar.high >= takeProfit) {
+      if (bar.high >= takeProfit!) {
         state = "TP_HIT";
         break;
       }
@@ -240,7 +240,7 @@ export function evaluateLiveSignal(
         state = "SL_HIT";
         break;
       }
-      if (bar.low <= takeProfit) {
+      if (bar.low <= takeProfit!) {
         state = "TP_HIT";
         break;
       }
