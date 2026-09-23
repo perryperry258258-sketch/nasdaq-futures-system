@@ -67,6 +67,14 @@ function saveSignalRecords(records: SignalRecord[]) {
 
 export function upsertFromLiveSignal(s: LiveSignal, tpMultiple: number): void {
   if (!s.refTime || !s.entryPrice || !s.stopLoss || !s.takeProfit || !s.riskDistance || !s.direction) return;
+  // 【2026-09修正：跟crypto版本同步】判斷「這筆值不值得記錄」不能只看「進場價算不算
+  // 得出來」——自從進場價/止損/止盈提前到「已突破、還在等回踩」階段就會算出來之後
+  // （見retestEngine.ts的修正），即使回踩從來沒有被真正確認過（例如4小時內都沒拉回、
+  // 或直接收盤跌破回參考區間），這幾個欄位也會有值，導致這種「根本沒有真正進場」的
+  // 過期訊號被誤記成一筆有輸贏點數的交易。改成用retestTime有沒有值來判斷：retestTime
+  // 只有在回踩真正被確認過才會被設定，這樣才不會把「回踩失敗、訊號根本沒成立」的
+  // 情況誤記成一筆真交易。crypto版本早就有這個修正，NQ這邊當初沒有同步到。
+  if (!s.retestTime) return;
   if (!["RETEST_CONFIRMED", "TP_HIT", "SL_HIT", "EXPIRED"].includes(s.state)) return;
 
   const id = `${s.symbol}_${s.refTime}`;
