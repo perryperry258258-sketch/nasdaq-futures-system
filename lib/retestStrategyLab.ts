@@ -30,6 +30,16 @@ import { isUsMarketHoliday } from "./usMarketHolidays";
 // （這筆交易1R代表幾點）跟pointsGained（這筆交易實際賺賠幾點，已扣成本）都存下來，
 // 讓使用者可以直接看真實點數分布，不是只看R值。
 //
+// 【2026-09新增：平倉規則比較（exitMode）】使用者想知道「沒碰到止盈止損時，抱到美股
+// 收盤（美東16:00）才平倉」會不會比現行的4小時平倉好。這裡新增exitMode參數：
+// - "4h"（預設，現行規則，行為完全不變）：從「突破」那根K棒起算48根5分K就平倉。
+//   注意是從突破起算，不是從進場起算，所以實際持倉時間通常少於4小時。
+// - "close"：一直抱到美東16:00（最後一根是15:55那根，用它的收盤價平倉），中間碰到
+//   止盈/止損照常出場。
+// Reference Candle/突破/回踩的判斷完全沒動，兩種模式用的是同一批訊號，只換平倉規則。
+// 唯一例外：回踩進場時已經過了美東16:00的訊號，"close"模式沒有收盤可以等，這種不進場
+// （回測頁會顯示被排除幾筆）。
+//
 // 【誠實揭露：這次沒做的】
 // - 只測「等回踩」這個進場方式，不重複測直接進場（已證實較差）
 // - 停損只測Reference區間對側，沒有測ATR停損或其他停損倍數
@@ -51,6 +61,23 @@ const DEFAULT_RETEST_ZONE_PCT = 0.3;
 // （還是漏掉一些假回踩），所以拔掉寫死的常數，改成呼叫端可以自己指定，
 // 預設值還是5，沒有傳參數的舊呼叫方式行為不變。
 const DEFAULT_NQ_RETEST_TOLERANCE_POINTS = 5;
+
+export type ExitMode = "4h" | "close";
+const US_CASH_CLOSE_MINUTES = 16 * 60; // 美東16:00
+
+// 從startIdx開始往後找，回傳「第一根已經不屬於同一天美股盤中（美東16:00以後，或換日）」
+// 的K棒index。迴圈用 j < 這個值，最後一根處理到的就是15:55那根。
+function findCashCloseEnd(candles: Candle[], startIdx: number): number {
+  const startInfo = getETInfo(candles[startIdx].time);
+  let j = startIdx;
+  while (j < candles.length) {
+    const info = getETInfo(candles[j].time);
+    if (info.year !== startInfo.year || info.month !== startInfo.month || info.day !== startInfo.day) break;
+    if (info.hour * 60 + info.minute >= US_CASH_CLOSE_MINUTES) break;
+    j++;
+  }
+  return j;
+}
 
 export interface RetestTrade {
   symbol: string;
@@ -84,7 +111,8 @@ export function runRetestStrategyBacktest(
   windowMinutes: 30 | 60 | 90 | 120,
   tpMultiple: number,
   retestZonePct: number = DEFAULT_RETEST_ZONE_PCT,
-  retestTolerancePoints: number = DEFAULT_NQ_RETEST_TOLERANCE_POINTS
+  retestTolerancePoints: number = DEFAULT_NQ_RETEST_TOLERANCE_POINTS,
+  exitMode: ExitMode = "4h"
 ): RetestTrade[] {
   const trades: RetestTrade[] = [];
   const windowBars = windowMinutes / 5;
@@ -124,11 +152,18 @@ export function runRetestStrategyBacktest(
     const takeProfit =
       direction === "LONG" ? entryPrice + riskDistance * tpMultiple : entryPrice - riskDistance * tpMultiple;
 
+    // 平倉上限：4h模式沿用detectFromOpen算好的trackEnd（行為不變）；close模式改成美東16:00。
+    let exitLimit = trackEnd;
+    if (exitMode === "close") {
+      exitLimit = findCashCloseEnd(candles5m, retestBarIdx);
+      if (exitLimit <= retestBarIdx) continue; // 進場時已經過了美東16:00，收盤版不進場
+    }
+
     let result: RetestTrade["result"] = "TIMEEXIT";
     let exitIndex = retestBarIdx;
     let exitPrice = candles5m[retestBarIdx].close;
 
-    for (let j = retestBarIdx; j < trackEnd; j++) {
+    for (let j = retestBarIdx; j < exitLimit; j++) {
       const bar = candles5m[j];
       if (direction === "LONG") {
         if (bar.low <= stopLoss) {
