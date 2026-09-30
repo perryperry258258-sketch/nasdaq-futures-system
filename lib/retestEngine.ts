@@ -1,5 +1,5 @@
 import { Candle } from "./yahooFutures";
-import { detectFromOpen, findTodayOpenIdx, checkDataFreshness, WEEKDAYS } from "./retestCore";
+import { detectFromOpen, findTodayOpenIdx, checkDataFreshness, WEEKDAYS, MAX_TRACK_BARS } from "./retestCore";
 import { getETInfo } from "./etTime";
 import { getUsMarketHolidayName } from "./usMarketHolidays";
 
@@ -18,7 +18,8 @@ import { getUsMarketHolidayName } from "./usMarketHolidays";
 // RETEST_CONFIRMED - 🟢 回踩確認，A級進場訊號（尚未觸及SL/TP）
 // TP_HIT           - 已觸及停利
 // SL_HIT           - 已觸及停損
-// EXPIRED          - 追蹤時間(4小時)到了，沒有完成整個流程
+// EXPIRED          - 追蹤時間(4小時)到了，沒有完成整個流程；如果曾經回踩進場，
+//                    代表「時間到出場」，exitPrice/exitTime會記錄出場價跟時間
 //
 // 【驗收第3項再次確認】detectFromOpen() 內部：只有窗口收集滿windowBars根才會選出
 // Reference Candle，突破偵測的迴圈從windowEnd才開始——這裡不重新判斷，直接繼承
@@ -34,6 +35,13 @@ import { getUsMarketHolidayName } from "./usMarketHolidays";
 // 現在改成呼叫detectFromOpen時帶上"points"模式，NQ_RETEST_TOLERANCE_POINTS是固定
 // 點數，不受NQ價格高低影響。這個數字（5點）是估計值，比典型的riskDistance
 // （通常60~150點）小很多，如果之後回測發現退場太嚴格或太寬鬆，這個數字可以再調整。
+//
+// 【2026-09修正：止盈止損檢查只算到4小時，跟回測一致】原本回踩後的止盈止損檢查
+// 迴圈一路掃到最新一根K棒，沒有在4小時(trackEnd)停下來——結果4小時之後才碰到的
+// 止盈/止損，也會被記成TP_HIT/SL_HIT，但回測在4小時就已經用收盤價平倉了，兩邊規則
+// 不一致。現在迴圈只掃到trackEnd前一根（跟retestStrategyLab.ts完全一樣），時間到
+// 就用最後一根的收盤價當出場價（exitPrice），一樣跟回測的TIMEEXIT算法相同。
+// 平倉規則本身沒變（2026-09回測比較過「抱到收盤」，沒有比較好，維持4小時）。
 
 const NQ_RETEST_TOLERANCE_POINTS = 5;
 
@@ -66,6 +74,8 @@ export interface LiveSignal {
   currentPrice: number | null;
   distanceToBreakoutPct: number | null; // 現價距離突破線還差幾%（WATCHING狀態時有意義）
   signalTime: number | null; // 進入RETEST_CONFIRMED狀態的時間
+  exitPrice?: number | null; // 出場價：TP_HIT=止盈價、SL_HIT=止損價、進場後EXPIRED=4小時最後一根收盤價
+  exitTime?: number | null; // 出場那根K棒的時間
   dataAgeMinutes: number | null;
   updatedAt: number;
   closedReason: string | null; // NO_SESSION_TODAY狀態時的具體原因，例如「週末休市」「勞動節休市」
@@ -129,6 +139,8 @@ export function evaluateLiveSignal(
     currentPrice: candles5m.length ? candles5m[candles5m.length - 1].close : null,
     distanceToBreakoutPct: null,
     signalTime: null,
+    exitPrice: null,
+    exitTime: null,
     dataAgeMinutes: freshness.ageMinutes,
     updatedAt: Date.now(),
     closedReason: null,
@@ -223,31 +235,48 @@ export function evaluateLiveSignal(
     };
   }
 
+  // 止盈止損只檢查到4小時追蹤窗口的最後一根（trackEnd前一根），跟回測完全一樣。
+  const trackLimit = Math.min(det.trackEnd, candles5m.length);
+  const trackComplete = candles5m.length >= det.breakoutIdx + MAX_TRACK_BARS;
   let state: SignalState = "RETEST_CONFIRMED";
-  for (let j = det.retestBarIdx; j < candles5m.length; j++) {
+  let exitPrice: number | null = null;
+  let exitTime: number | null = null;
+  for (let j = det.retestBarIdx; j < trackLimit; j++) {
     const bar = candles5m[j];
     if (det.direction === "LONG") {
       if (bar.low <= stopLoss) {
         state = "SL_HIT";
+        exitPrice = stopLoss;
+        exitTime = bar.time;
         break;
       }
       if (bar.high >= takeProfit!) {
         state = "TP_HIT";
+        exitPrice = takeProfit!;
+        exitTime = bar.time;
         break;
       }
     } else {
       if (bar.high >= stopLoss) {
         state = "SL_HIT";
+        exitPrice = stopLoss;
+        exitTime = bar.time;
         break;
       }
       if (bar.low <= takeProfit!) {
         state = "TP_HIT";
+        exitPrice = takeProfit!;
+        exitTime = bar.time;
         break;
       }
     }
   }
-  if (state === "RETEST_CONFIRMED" && candles5m.length - 1 >= det.trackEnd) {
+  if (state === "RETEST_CONFIRMED" && trackComplete) {
+    // 4小時到了還沒碰到止盈止損：用追蹤窗口最後一根的收盤價出場（跟回測TIMEEXIT一樣）
+    const lastBar = candles5m[trackLimit - 1];
     state = "EXPIRED";
+    exitPrice = lastBar.close;
+    exitTime = lastBar.time;
   }
 
   return {
@@ -267,6 +296,8 @@ export function evaluateLiveSignal(
     currentPrice,
     distanceToBreakoutPct: 0,
     signalTime: candles5m[det.retestBarIdx].time,
+    exitPrice,
+    exitTime,
     dataAgeMinutes: freshness.ageMinutes,
     updatedAt: Date.now(),
     closedReason: null,
