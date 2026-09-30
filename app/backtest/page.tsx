@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { Candle } from "@/lib/yahooFutures";
 import { loadNqHistoricalCandles, NQ_HISTORY_INFO } from "@/lib/nqHistoricalData";
-import { runRetestStrategyBacktest, auditRetestStrategy, splitTrainValOOS, RetestStrategyReport, RetestTrade } from "@/lib/retestStrategyLab";
+import { runRetestStrategyBacktest, auditRetestStrategy, splitTrainValOOS, RetestStrategyReport, RetestTrade, ExitMode } from "@/lib/retestStrategyLab";
 import { runBreakoutDirectBacktest, auditBreakoutStrategy, splitBreakoutTrainValOOS, BreakoutTrade } from "@/lib/breakoutStrategyLab";
 import { runMonteCarlo, MonteCarloResult } from "@/lib/monteCarlo";
 
@@ -22,6 +22,11 @@ import { runMonteCarlo, MonteCarloResult } from "@/lib/monteCarlo";
 // （原因見 lib/retestStrategyLab.ts 頂部註解）。這裡在每個RetestStrategyCard多加一排
 // 點數統計（總點數/平均贏點數/平均輸點數/最大回撤點數），不取代R值統計、是並列顯示，
 // 讓使用者可以直接比較兩種角度。
+//
+// 【2026-09新增：平倉規則比較】回踩策略模式下，一次跑兩個版本：現行「4小時平倉」跟
+// 「抱到美股收盤（美東16:00）平倉」，同一批訊號、只換平倉規則，並排比較。
+// 樣本外段用「4小時版本」的切點時間套在兩邊，確保比的是同一段時間，不是各切各的。
+// 下方原本的三段卡片/蒙地卡羅/匯出，會依照你選的平倉規則顯示。
 
 const DURATION_OPTIONS = [
   { label: "90天", days: 90 },
@@ -99,15 +104,79 @@ function RetestStrategyCard({ r }: { r: RetestStrategyReport }) {
   );
 }
 
+// 平倉規則比較用的摘要：在auditRetestStrategy既有統計之外，多算「時間出場」的筆數/
+// 平均點數，跟平均持倉分鐘數——這三個是判斷「抱到收盤」有沒有幫助最直接的數字。
+interface ExitSummary {
+  count: number;
+  winRate: number;
+  expectancy: number;
+  totalPoints: number;
+  maxDDPoints: number;
+  timeExitCount: number;
+  timeExitAvgPoints: number;
+  avgHoldMinutes: number;
+}
+
+function summarizeExit(trades: RetestTrade[]): ExitSummary {
+  const r = auditRetestStrategy(trades, "");
+  const te = trades.filter((t) => t.result === "TIMEEXIT");
+  const avgHoldMinutes = trades.length ? trades.reduce((a, t) => a + (t.exitTime - t.entryTime) / 60, 0) / trades.length : 0;
+  return {
+    count: r.tradeCount,
+    winRate: r.winRate,
+    expectancy: r.expectancy,
+    totalPoints: r.totalPoints,
+    maxDDPoints: r.maxDrawdownPoints,
+    timeExitCount: te.length,
+    timeExitAvgPoints: te.length ? te.reduce((a, t) => a + t.pointsGained, 0) / te.length : 0,
+    avgHoldMinutes,
+  };
+}
+
+const signed = (v: number, digits: number) => `${v >= 0 ? "+" : ""}${v.toFixed(digits)}`;
+
+const EXIT_ROWS: [string, (s: ExitSummary) => string][] = [
+  ["筆數", (s) => `${s.count}`],
+  ["勝率（不含時間出場）", (s) => `${s.winRate.toFixed(1)}%`],
+  ["期望值", (s) => `${signed(s.expectancy, 2)}R`],
+  ["總點數", (s) => signed(s.totalPoints, 0)],
+  ["最大回撤", (s) => `-${s.maxDDPoints.toFixed(0)}點`],
+  ["時間出場筆數", (s) => `${s.timeExitCount}`],
+  ["時間出場平均", (s) => `${signed(s.timeExitAvgPoints, 1)}點`],
+  ["平均持倉", (s) => `${s.avgHoldMinutes.toFixed(0)}分`],
+];
+
+function ExitCompareCard({ title, a, b }: { title: string; a: ExitSummary; b: ExitSummary }) {
+  return (
+    <div className="rounded-xl bg-panel2 p-3 mb-3">
+      <div className="text-xs font-semibold mb-2">{title}</div>
+      <div className="grid grid-cols-3 gap-y-1.5 text-xs">
+        <div />
+        <div className="text-subtext text-right">4小時平倉</div>
+        <div className="text-subtext text-right">收盤平倉</div>
+        {EXIT_ROWS.map(([label, fn]) => (
+          <Fragment key={label}>
+            <div className="text-subtext">{label}</div>
+            <div className="text-right numeric-safe">{fn(a)}</div>
+            <div className="text-right numeric-safe font-semibold">{fn(b)}</div>
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function BacktestPage() {
   const [days, setDays] = useState(1825);
   const [window, setWindowMinutes] = useState<30 | 60 | 90 | 120>(60);
   const [tolerance, setTolerance] = useState(5);
   const [mode, setMode] = useState<"retest" | "breakout">("retest");
+  const [exitMode, setExitMode] = useState<ExitMode>("4h");
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [trades, setTrades] = useState<RetestTrade[] | BreakoutTrade[] | null>(null);
+  const [tradesClose, setTradesClose] = useState<RetestTrade[] | null>(null);
   const [exportText, setExportText] = useState<string | null>(null);
   const [exportCopied, setExportCopied] = useState(false);
 
@@ -115,6 +184,7 @@ export default function BacktestPage() {
     setLoading(true);
     setError(null);
     setTrades(null);
+    setTradesClose(null);
     setExportText(null);
     try {
       setProgress("讀取內建歷史資料中…");
@@ -127,12 +197,15 @@ export default function BacktestPage() {
         setProgress("");
         return;
       }
-      setProgress(mode === "retest" ? "執行回踩策略回測中…" : "執行突破直接進場回測中…");
-      const allTrades =
-        mode === "retest"
-          ? runRetestStrategyBacktest("NQ", sliced, window, ENGINE_TP, 0.3, tolerance)
-          : runBreakoutDirectBacktest("NQ", sliced, window, ENGINE_TP);
-      setTrades(allTrades);
+      setProgress(mode === "retest" ? "執行回踩策略回測中（4小時＋收盤兩個版本）…" : "執行突破直接進場回測中…");
+      if (mode === "retest") {
+        const tradesA = runRetestStrategyBacktest("NQ", sliced, window, ENGINE_TP, 0.3, tolerance, "4h");
+        const tradesB = runRetestStrategyBacktest("NQ", sliced, window, ENGINE_TP, 0.3, tolerance, "close");
+        setTrades(tradesA);
+        setTradesClose(tradesB);
+      } else {
+        setTrades(runBreakoutDirectBacktest("NQ", sliced, window, ENGINE_TP));
+      }
     } catch (err) {
       setError((err as Error).message);
     }
@@ -140,11 +213,14 @@ export default function BacktestPage() {
     setProgress("");
   };
 
+  // 下方詳細卡片顯示哪一個平倉版本（突破直接進場模式不受影響）
+  const displayTrades = mode === "retest" && exitMode === "close" && tradesClose ? tradesClose : trades;
+
   const oosSplit =
-    trades && mode === "retest"
-      ? splitTrainValOOS(trades as RetestTrade[])
-      : trades && mode === "breakout"
-      ? splitBreakoutTrainValOOS(trades as BreakoutTrade[])
+    displayTrades && mode === "retest"
+      ? splitTrainValOOS(displayTrades as RetestTrade[])
+      : displayTrades && mode === "breakout"
+      ? splitBreakoutTrainValOOS(displayTrades as BreakoutTrade[])
       : null;
   const auditFn = mode === "retest" ? auditRetestStrategy : auditBreakoutStrategy;
   const trainReport = oosSplit ? auditFn(oosSplit.train as never, "訓練段（前60%）") : null;
@@ -155,6 +231,22 @@ export default function BacktestPage() {
   // 假象誤導，看不出真實點數的回撤可能有多深。改用pointsGained，結果單位是點數。
   const oosMonteCarlo: MonteCarloResult | null =
     oosSplit && oosSplit.oos.length >= 20 ? runMonteCarlo(oosSplit.oos.map((t) => t.pointsGained), 2000) : null;
+
+  // 平倉規則比較：樣本外切點用4小時版本的切點時間，兩邊套同一段時間
+  const exitCompare = (() => {
+    if (mode !== "retest" || !trades || !tradesClose) return null;
+    const a = trades as RetestTrade[];
+    const b = tradesClose;
+    const oosStart = splitTrainValOOS(a).oos[0]?.entryTime ?? Infinity;
+    return {
+      all: { a: summarizeExit(a), b: summarizeExit(b) },
+      oos: {
+        a: summarizeExit(a.filter((t) => t.entryTime >= oosStart)),
+        b: summarizeExit(b.filter((t) => t.entryTime >= oosStart)),
+      },
+      skipped: a.length - b.length,
+    };
+  })();
 
   const verdict =
     trainReport && valReport && oosReport
@@ -177,6 +269,7 @@ export default function BacktestPage() {
       windowMinutes: window,
       tpMultiple: ENGINE_TP,
       retestTolerancePoints: tolerance,
+      exitMode: mode === "retest" ? exitMode : null,
       computedAt: Date.now(),
       // 【新增】點數版摘要一起匯出，方便之後不用重跑就能對照真實點數
       totalPoints: oosReport.totalPoints,
@@ -223,6 +316,7 @@ export default function BacktestPage() {
               onClick={() => {
                 setMode("retest");
                 setTrades(null);
+                setTradesClose(null);
                 setExportText(null);
               }}
               className={`flex-1 rounded-xl text-sm py-2.5 border transition ${
@@ -235,6 +329,7 @@ export default function BacktestPage() {
               onClick={() => {
                 setMode("breakout");
                 setTrades(null);
+                setTradesClose(null);
                 setExportText(null);
               }}
               className={`flex-1 rounded-xl text-sm py-2.5 border transition ${
@@ -304,6 +399,35 @@ export default function BacktestPage() {
 
       {error && <div className="rounded-xl border border-bear/40 bg-bear/10 p-3 mb-4 text-xs text-bear leading-relaxed break-all">❌ {error}</div>}
 
+      {exitCompare && (
+        <div className="rounded-2xl border border-border bg-panel p-4 mb-4">
+          <div className="text-sm font-semibold mb-1">平倉規則比較</div>
+          <div className="text-[10px] text-subtext mb-3 leading-relaxed">
+            同一批訊號，只換「沒碰到止盈止損時何時平倉」：4小時（從突破起算）vs 抱到美東16:00收盤。勝率不含時間出場的單，所以主要看期望值、總點數跟最大回撤。
+            {exitCompare.skipped > 0 && ` 回踩進場時已過美東16:00、收盤版沒有進場的訊號：${exitCompare.skipped}筆。`}
+          </div>
+          <ExitCompareCard title="全部期間" a={exitCompare.all.a} b={exitCompare.all.b} />
+          <ExitCompareCard title="樣本外段（同一段時間）" a={exitCompare.oos.a} b={exitCompare.oos.b} />
+          <label className="text-xs text-subtext mb-1 block mt-1">下方詳細數據顯示</label>
+          <div className="flex gap-2">
+            {(["4h", "close"] as ExitMode[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => {
+                  setExitMode(m);
+                  setExportText(null);
+                }}
+                className={`flex-1 rounded-xl text-sm py-2.5 border transition ${
+                  exitMode === m ? "bg-brand/15 text-brand border-brand/40" : "bg-panel2 text-subtext border-border"
+                }`}
+              >
+                {m === "4h" ? "4小時平倉" : "收盤平倉"}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {trainReport && valReport && oosReport && verdict && (
         <div>
           <div className="rounded-xl bg-panel2 p-3 mb-3">
@@ -358,4 +482,4 @@ export default function BacktestPage() {
       )}
     </main>
   );
-              }
+            }
