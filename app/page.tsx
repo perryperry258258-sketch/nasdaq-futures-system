@@ -23,6 +23,10 @@ import EconomicEventBanner from "@/components/EconomicEventBanner";
 //   還會維持這個表現
 // - 資料來源限制（Yahoo免費、非官方）：15-20分鐘延遲、只能看最近約60天歷史
 // - 背景輪詢只在分頁還開著（可在背景分頁）時才會運作，完全關閉分頁就會停止
+//
+// 【2026-09新增：出場顯示】進度流程多一個「出場」步驟（止盈/止損/時間到出場），
+// 數值明細多顯示出場價、出場時間、輸贏點數。原本進場後4小時時間到的單，「可以進場」
+// 會變回沒打勾（因為EXPIRED不在entryReached清單裡），看起來像沒進場，這次一起修正。
 
 const ENGINE_WINDOW = 60;
 const ENGINE_TP = 1;
@@ -33,11 +37,18 @@ const AUTO_POLL_MS = 5 * 60 * 1000; // 5分鐘
 // 純粹把 LiveSignal 已經算出來的欄位拆解成流程步驟顯示，沒有新增任何判斷邏輯。
 type StepStatus = "done" | "current" | "pending";
 
+const EXIT_LABEL: Partial<Record<LiveSignal["state"], string>> = {
+  TP_HIT: "止盈出場",
+  SL_HIT: "止損出場",
+  EXPIRED: "時間到出場",
+};
+
 function computeSteps(s: LiveSignal): { label: string; status: StepStatus; time: number | null }[] {
   const windowDone = s.refHigh != null;
   const breakoutDone = s.breakoutTime != null;
   const retestDone = s.retestTime != null;
-  const entryReached = ["RETEST_CONFIRMED", "TP_HIT", "SL_HIT"].includes(s.state);
+  const entryReached = ["RETEST_CONFIRMED", "TP_HIT", "SL_HIT"].includes(s.state) || (s.state === "EXPIRED" && retestDone);
+  const exitDone = s.exitTime != null;
 
   const step = (done: boolean, isCurrent: boolean, label: string, time: number | null) => ({
     label,
@@ -51,7 +62,8 @@ function computeSteps(s: LiveSignal): { label: string; status: StepStatus; time:
     step(breakoutDone, s.state === "WATCHING", "突破", s.breakoutTime),
     step(breakoutDone, s.state === "WAIT_RETEST", "等待回踩", null),
     step(retestDone, false, "回踩確認", s.retestTime),
-    step(entryReached, s.state === "RETEST_CONFIRMED", "可以進場", s.signalTime),
+    step(entryReached, false, "可以進場", s.signalTime),
+    step(exitDone, s.state === "RETEST_CONFIRMED", exitDone ? EXIT_LABEL[s.state] ?? "出場" : "出場", s.exitTime ?? null),
   ];
 }
 
@@ -120,6 +132,12 @@ export default function HomePage() {
   const info = signal ? getDisplayInfo(signal) : null;
   const isActive = signal?.state === "RETEST_CONFIRMED";
   const s = OOS_SEED.summary;
+  const pnlPoints =
+    signal && signal.exitPrice != null && signal.entryPrice != null && signal.direction
+      ? signal.direction === "LONG"
+        ? signal.exitPrice - signal.entryPrice
+        : signal.entryPrice - signal.exitPrice
+      : null;
 
   return (
     <main className="max-w-md mx-auto px-4 pt-8 pb-6">
@@ -204,6 +222,16 @@ export default function HomePage() {
               {signal.entryPrice != null && <Row label="進場價" value={signal.entryPrice.toFixed(2)} highlight />}
               {signal.stopLoss != null && <Row label="止損價" value={signal.stopLoss.toFixed(2)} color="text-bear" />}
               {signal.takeProfit != null && <Row label="止盈價" value={signal.takeProfit.toFixed(2)} color="text-bull" />}
+              {signal.exitPrice != null && <Row label="出場價" value={signal.exitPrice.toFixed(2)} highlight />}
+              {signal.exitTime != null && <Row label="出場時間" value={fmtTime(signal.exitTime)} />}
+              {pnlPoints != null && (
+                <Row
+                  label="輸贏點數"
+                  value={`${pnlPoints >= 0 ? "+" : ""}${pnlPoints.toFixed(2)}點`}
+                  color={pnlPoints >= 0 ? "text-bull" : "text-bear"}
+                  highlight
+                />
+              )}
               <Row label="資料延遲" value={signal.dataAgeMinutes != null ? `${signal.dataAgeMinutes.toFixed(1)} 分鐘` : "—"} />
             </div>
           </div>
