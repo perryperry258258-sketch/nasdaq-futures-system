@@ -9,10 +9,14 @@ import { OOS_SEED } from "./oosSeed";
 // 直接覆寫同一筆記錄就好。
 //
 // 【誠實揭露，跟crypto版本一樣的限制】
-// - EXPIRED時的rMultiple/pointsGained是用「過期當下的現價」概算，不是精確的時間出場
-//   價格模擬
-// - WIN/LOSS的rMultiple/pointsGained沒有扣手續費/滑價（回測有扣），數字會比回測期望值
-//   好看一點點
+// - WIN/LOSS/時間出場的rMultiple/pointsGained都沒有扣手續費/滑價（回測有扣），數字會比
+//   回測期望值好看一點點
+//
+// 【2026-09修正：時間出場改用精確出場價】原本EXPIRED（進場後4小時沒碰到止盈止損）是用
+// 「過期當下的現價」概算輸贏點數，會因為你什麼時候打開App而不同。現在即時引擎會算出
+// exitPrice（4小時追蹤窗口最後一根的收盤價，跟回測TIMEEXIT完全一樣），這裡改用它計算，
+// 才能跟回測的「時間出場平均」對照。舊紀錄沒有exitPrice欄位，維持原本的概算值。
+// status的值還是叫"EXPIRED"（沒改名，避免舊紀錄讀不到），畫面上顯示成「時間到出場」。
 //
 // 【2026-09新增：點數欄位改成主要顯示】使用者實單交易後發現：R值本身對稱，但因為
 // 每次訊號的riskDistance（參考K棒高低點範圍，也就是1R代表幾點）差異很大（曾經查過
@@ -38,9 +42,12 @@ export interface SignalRecord {
   status: "OPEN" | "WIN" | "LOSS" | "EXPIRED";
   rMultiple: number | null;
   // 【新增】這筆交易實際賺賠幾點——WIN是+riskDistance（entryPrice跟takeProfit的
-  // 距離）、LOSS是-riskDistance（entryPrice跟stopLoss的距離）、EXPIRED是用過期當下
-  // 現價概算出的實際點數差。這是畫面上主要顯示的數字，不是rMultiple。
+  // 距離）、LOSS是-riskDistance（entryPrice跟stopLoss的距離）、EXPIRED（時間到出場）是
+  // 用出場價算出的實際點數差。這是畫面上主要顯示的數字，不是rMultiple。
   pointsGained: number | null;
+  // 【2026-09新增】出場價/出場時間。舊紀錄沒有這兩個欄位（undefined）。
+  exitPrice?: number | null;
+  exitTime?: number | null;
   firstLoggedAt: number;
   lastUpdatedAt: number;
 }
@@ -89,12 +96,13 @@ export function upsertFromLiveSignal(s: LiveSignal, tpMultiple: number): void {
   } else if (status === "LOSS") {
     rMultiple = -1;
     pointsGained = -s.riskDistance;
-  } else if (status === "EXPIRED" && s.currentPrice) {
-    rMultiple =
-      s.direction === "LONG"
-        ? (s.currentPrice - s.entryPrice) / s.riskDistance
-        : (s.entryPrice - s.currentPrice) / s.riskDistance;
-    pointsGained = s.direction === "LONG" ? s.currentPrice - s.entryPrice : s.entryPrice - s.currentPrice;
+  } else if (status === "EXPIRED") {
+    // 時間到出場：優先用引擎算好的精確出場價，沒有才退回用現價概算
+    const px = s.exitPrice ?? s.currentPrice;
+    if (px) {
+      pointsGained = s.direction === "LONG" ? px - s.entryPrice : s.entryPrice - px;
+      rMultiple = pointsGained / s.riskDistance;
+    }
   }
 
   const records = loadSignalRecords();
@@ -118,6 +126,8 @@ export function upsertFromLiveSignal(s: LiveSignal, tpMultiple: number): void {
     status,
     rMultiple,
     pointsGained,
+    exitPrice: s.exitPrice ?? null,
+    exitTime: s.exitTime ?? null,
     firstLoggedAt: idx === -1 ? now : records[idx].firstLoggedAt,
     lastUpdatedAt: now,
   };
